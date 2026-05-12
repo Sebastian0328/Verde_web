@@ -1,6 +1,5 @@
 import { google } from "googleapis";
 
-// La private key en Vercel se pega con \n literales; los reemplazamos por saltos reales
 function getPrivateKey(): string {
   const key = process.env.GOOGLE_SHEETS_PRIVATE_KEY;
   if (!key) throw new Error("Falta GOOGLE_SHEETS_PRIVATE_KEY");
@@ -15,6 +14,192 @@ function getAuth() {
   });
 }
 
+function getSpreadsheetId(): string {
+  const id = process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
+  if (!id) throw new Error("Falta GOOGLE_SHEETS_SPREADSHEET_ID");
+  return id;
+}
+
+// "9:00" → "09:00", "9:5" → "09:05"
+function normalizeTime(t: string): string {
+  if (!t) return "";
+  const [rawH = "0", rawM = "00"] = t.trim().split(":");
+  return `${rawH.padStart(2, "0")}:${rawM.padStart(2, "0")}`;
+}
+
+// Trims and keeps only YYYY-MM-DD
+function normalizeDate(d: string): string {
+  if (!d) return "";
+  return d.trim().slice(0, 10);
+}
+
+async function getSheetValues(range: string): Promise<string[][]> {
+  const auth = getAuth();
+  const sheets = google.sheets({ version: "v4", auth });
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: getSpreadsheetId(),
+    range,
+  });
+  return (res.data.values ?? []) as string[][];
+}
+
+// ─── Products ────────────────────────────────────────────────────────────────
+
+export interface ProductRow {
+  productId: string;
+  name: string;
+  description: string;
+  finalPrice: number;
+  depositAmount: number;
+  available: boolean;
+  allergens: string[];
+  imageUrl: string;
+  category: string;
+}
+
+export async function getProductsRows(): Promise<ProductRow[]> {
+  const rows = await getSheetValues("Products!A2:I");
+  return rows
+    .filter((r) => r.length >= 6)
+    .map((r) => ({
+      productId: r[0] ?? "",
+      name: r[1] ?? "",
+      description: r[2] ?? "",
+      finalPrice: parseFloat(r[3] ?? "0") || 0,
+      depositAmount: parseFloat(r[4] ?? "0") || 0,
+      available: (r[5] ?? "").toUpperCase() === "TRUE",
+      allergens: r[6] ? r[6].split(",").map((a) => a.trim()).filter(Boolean) : [],
+      imageUrl: r[7] ?? "",
+      category: r[8] ?? "",
+    }))
+    .filter((p) => p.available);
+}
+
+// ─── Settings ────────────────────────────────────────────────────────────────
+
+export interface Settings {
+  reservationStartTime: string;
+  reservationEndTime: string;
+  slotIntervalMinutes: number;
+  minLeadDays: number;
+  currency: string;
+  reservationsOpen: boolean;
+}
+
+export async function getSettings(): Promise<Settings> {
+  const rows = await getSheetValues("Settings!A2:C");
+  const map: Record<string, string> = {};
+  for (const row of rows) {
+    if (row[0]) map[row[0]] = row[1] ?? "";
+  }
+  return {
+    reservationStartTime: map["reservationStartTime"] ?? "09:00",
+    reservationEndTime: map["reservationEndTime"] ?? "19:00",
+    slotIntervalMinutes: parseInt(map["slotIntervalMinutes"] ?? "60", 10) || 60,
+    minLeadDays: parseInt(map["minLeadDays"] ?? "1", 10) || 1,
+    currency: map["currency"] ?? "eur",
+    reservationsOpen: (map["reservationsOpen"] ?? "TRUE").toUpperCase() === "TRUE",
+  };
+}
+
+// ─── Availability ─────────────────────────────────────────────────────────────
+
+export interface AvailabilityRow {
+  date: string;
+  isOpen: boolean;
+  maxOrdersPerSlot: number;
+  manuallySoldOut: boolean;
+  note: string;
+}
+
+export async function getAvailabilityRows(): Promise<AvailabilityRow[]> {
+  const rows = await getSheetValues("Availability!A2:E");
+  return rows
+    .filter((r) => r[0])
+    .map((r) => ({
+      date: r[0],
+      isOpen: (r[1] ?? "").toUpperCase() === "TRUE",
+      maxOrdersPerSlot: parseInt(r[2] ?? "0", 10) || 0,
+      manuallySoldOut: (r[3] ?? "").toUpperCase() === "TRUE",
+      note: r[4] ?? "",
+    }));
+}
+
+// ─── SlotOverrides ────────────────────────────────────────────────────────────
+
+export interface SlotOverrideRow {
+  date: string;
+  time: string;
+  status: "sold_out" | "available";
+  maxOrdersOverride: number | null;
+  note: string;
+}
+
+export async function getSlotOverridesRows(): Promise<SlotOverrideRow[]> {
+  const rows = await getSheetValues("SlotOverrides!A2:E");
+  return rows
+    .filter((r) => r[0] && r[1])
+    .map((r) => ({
+      date: r[0],
+      time: r[1],
+      status: (r[2] ?? "available") as "sold_out" | "available",
+      maxOrdersOverride: r[3] ? parseInt(r[3], 10) : null,
+      note: r[4] ?? "",
+    }));
+}
+
+// ─── Orders ───────────────────────────────────────────────────────────────────
+
+export interface OrderSheetRow {
+  createdAt: string;
+  status: string;
+  stripeSessionId: string;
+  customerName: string;
+  email: string;
+  phone: string;
+  productId: string;
+  productName: string;
+  quantity: number;
+  reservationDate: string;
+  reservationTime: string;
+  finalPrice: number;
+  depositPaid: number;
+  pendingAmount: number;
+  notes: string;
+}
+
+export async function getOrdersRows(): Promise<OrderSheetRow[]> {
+  const rows = await getSheetValues("Orders!A2:O");
+  return rows
+    .filter((r) => r[0])
+    .map((r) => ({
+      createdAt: r[0] ?? "",
+      status: r[1] ?? "",
+      stripeSessionId: r[2] ?? "",
+      customerName: r[3] ?? "",
+      email: r[4] ?? "",
+      phone: r[5] ?? "",
+      productId: r[6] ?? "",
+      productName: r[7] ?? "",
+      quantity: parseInt(r[8] ?? "0", 10) || 0,
+      reservationDate: normalizeDate(r[9] ?? ""),
+      reservationTime: normalizeTime(r[10] ?? ""),
+      finalPrice: parseFloat(r[11] ?? "0") || 0,
+      depositPaid: parseFloat(r[12] ?? "0") || 0,
+      pendingAmount: parseFloat(r[13] ?? "0") || 0,
+      notes: r[14] ?? "",
+    }));
+}
+
+export async function findOrderByStripeSessionId(
+  sessionId: string
+): Promise<OrderSheetRow | null> {
+  const orders = await getOrdersRows();
+  return orders.find((o) => o.stripeSessionId === sessionId) ?? null;
+}
+
+// ─── Append Order ─────────────────────────────────────────────────────────────
+
 export interface OrderRow {
   createdAt: string;
   status: string;
@@ -25,20 +210,21 @@ export interface OrderRow {
   productId: string;
   productName: string;
   quantity: number;
-  deliveryDay: string;
-  notes: string;
+  reservationDate: string;
+  reservationTime: string;
   finalPrice: number;
   depositPaid: number;
   pendingAmount: number;
+  notes: string;
+  // Delivery fields (columns P–T)
+  deliveryAddress: string;
+  deliveryDetails: string;
+  postalCode: string;
+  deliveryZone: string;
+  deliveryMethod: string;
 }
 
-// Guarda un pedido confirmado en la pestaña "Pedidos"
-// Nota: no se valida duplicado aquí por falta de BD.
-// Para evitar dobles, comprueba en la hoja que el stripeSessionId no exista antes de insertar.
 export async function appendOrderToSheet(order: OrderRow): Promise<void> {
-  const spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
-  if (!spreadsheetId) throw new Error("Falta GOOGLE_SHEETS_SPREADSHEET_ID");
-
   const auth = getAuth();
   const sheets = google.sheets({ version: "v4", auth });
 
@@ -52,20 +238,28 @@ export async function appendOrderToSheet(order: OrderRow): Promise<void> {
     order.productId,
     order.productName,
     order.quantity,
-    order.deliveryDay,
-    order.notes,
+    order.reservationDate,
+    order.reservationTime,
     order.finalPrice,
     order.depositPaid,
     order.pendingAmount,
+    order.notes,
+    order.deliveryAddress,
+    order.deliveryDetails,
+    order.postalCode,
+    order.deliveryZone,
+    order.deliveryMethod,
   ];
 
   await sheets.spreadsheets.values.append({
-    spreadsheetId,
-    range: "Pedidos!A:N",
+    spreadsheetId: getSpreadsheetId(),
+    range: "Orders!A:T",
     valueInputOption: "USER_ENTERED",
     requestBody: { values: [row] },
   });
 }
+
+// ─── Append Waitlist ──────────────────────────────────────────────────────────
 
 export interface WaitlistRow {
   createdAt: string;
@@ -75,11 +269,7 @@ export interface WaitlistRow {
   message: string;
 }
 
-// Guarda una entrada en la pestaña "Waitlist"
 export async function appendWaitlistToSheet(entry: WaitlistRow): Promise<void> {
-  const spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
-  if (!spreadsheetId) throw new Error("Falta GOOGLE_SHEETS_SPREADSHEET_ID");
-
   const auth = getAuth();
   const sheets = google.sheets({ version: "v4", auth });
 
@@ -92,7 +282,7 @@ export async function appendWaitlistToSheet(entry: WaitlistRow): Promise<void> {
   ];
 
   await sheets.spreadsheets.values.append({
-    spreadsheetId,
+    spreadsheetId: getSpreadsheetId(),
     range: "Waitlist!A:E",
     valueInputOption: "USER_ENTERED",
     requestBody: { values: [row] },

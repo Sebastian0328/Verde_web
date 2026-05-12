@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { stripe } from "@/lib/stripe";
-import { appendOrderToSheet } from "@/lib/google-sheets";
-import { sendConfirmationToCustomer, sendInternalOrderNotification } from "@/lib/email";
+import { appendOrderToSheet, findOrderByStripeSessionId } from "@/lib/google-sheets";
+import {
+  sendConfirmationToCustomer,
+  sendInternalOrderNotification,
+  sendOverbookingAlert,
+} from "@/lib/email";
+import { isSlotAvailable, normalizeTime, normalizeDate } from "@/lib/availability";
 import Stripe from "stripe";
 
 export const runtime = "nodejs";
@@ -45,6 +50,17 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Metadata vacía." }, { status: 400 });
     }
 
+    // Dedup: skip if already processed
+    try {
+      const existing = await findOrderByStripeSessionId(session.id);
+      if (existing) {
+        console.log("[stripe-webhook] Pedido ya procesado:", session.id);
+        return NextResponse.json({ received: true });
+      }
+    } catch (err) {
+      console.error("[stripe-webhook] Error en dedup check:", err);
+    }
+
     let items: ItemMeta[] = [];
     try {
       items = JSON.parse(meta.items ?? "[]");
@@ -54,14 +70,31 @@ export async function POST(req: NextRequest) {
 
     const totalDeposit = Number(meta.totalDeposit);
     const totalPending = Number(meta.totalPending);
-    const totalFinal = Number(meta.totalFinal);
+    const reservationDate = normalizeDate(meta.reservationDate ?? "");
+    const reservationTime = normalizeTime(meta.reservationTime ?? "");
+    const deliveryMethod = meta.deliveryMethod ?? "delivery";
+    const deliveryAddress = meta.deliveryAddress ?? "";
+    const deliveryDetails = meta.deliveryDetails ?? "";
+    const postalCode = meta.postalCode ?? "";
+    const deliveryZone = meta.deliveryZone ?? "";
+
+    // Re-validate slot availability before saving
+    let slotStillAvailable = false;
+    try {
+      slotStillAvailable = await isSlotAvailable(reservationDate, reservationTime);
+    } catch (err) {
+      console.error("[stripe-webhook] Error validando slot:", err);
+      // benefit of the doubt: save as NEEDS_REVIEW
+      slotStillAvailable = false;
+    }
+
+    const orderStatus = slotStillAvailable ? "PAID" : "NEEDS_REVIEW";
 
     try {
-      // Una fila en Google Sheets por cada producto del pedido
       for (const item of items) {
         await appendOrderToSheet({
           createdAt: new Date().toISOString(),
-          status: "confirmado",
+          status: orderStatus,
           stripeSessionId: session.id,
           customerName: meta.customerName,
           email: meta.email,
@@ -69,11 +102,17 @@ export async function POST(req: NextRequest) {
           productId: item.id,
           productName: item.name,
           quantity: item.qty,
-          deliveryDay: meta.deliveryDay,
+          reservationDate,
+          reservationTime,
           notes: meta.notes ?? "",
           finalPrice: item.price * item.qty,
           depositPaid: item.deposit * item.qty,
           pendingAmount: (item.price - item.deposit) * item.qty,
+          deliveryMethod,
+          deliveryAddress,
+          deliveryDetails,
+          postalCode,
+          deliveryZone,
         });
       }
 
@@ -83,27 +122,53 @@ export async function POST(req: NextRequest) {
         finalPrice: item.price,
       }));
 
-      await sendConfirmationToCustomer({
-        customerName: meta.customerName,
-        email: meta.email,
-        phone: meta.phone,
-        items: emailItems,
-        deliveryDay: meta.deliveryDay,
-        depositPaid: totalDeposit,
-        pendingAmount: totalPending,
-        notes: meta.notes,
-      });
+      if (slotStillAvailable) {
+        const deliveryEmailFields = {
+          deliveryMethod,
+          deliveryAddress,
+          deliveryDetails,
+          postalCode,
+          deliveryZone,
+        };
 
-      await sendInternalOrderNotification({
-        customerName: meta.customerName,
-        email: meta.email,
-        phone: meta.phone,
-        items: emailItems,
-        deliveryDay: meta.deliveryDay,
-        depositPaid: totalDeposit,
-        pendingAmount: totalPending,
-        notes: meta.notes,
-      });
+        await sendConfirmationToCustomer({
+          customerName: meta.customerName,
+          email: meta.email,
+          phone: meta.phone,
+          items: emailItems,
+          reservationDate,
+          reservationTime,
+          depositPaid: totalDeposit,
+          pendingAmount: totalPending,
+          notes: meta.notes,
+          ...deliveryEmailFields,
+        });
+
+        await sendInternalOrderNotification({
+          customerName: meta.customerName,
+          email: meta.email,
+          phone: meta.phone,
+          items: emailItems,
+          reservationDate,
+          reservationTime,
+          depositPaid: totalDeposit,
+          pendingAmount: totalPending,
+          notes: meta.notes,
+          ...deliveryEmailFields,
+        });
+      } else {
+        await sendOverbookingAlert({
+          customerName: meta.customerName,
+          email: meta.email,
+          phone: meta.phone,
+          items: emailItems,
+          reservationDate,
+          reservationTime,
+          stripeSessionId: session.id,
+          depositPaid: totalDeposit,
+          pendingAmount: totalPending,
+        });
+      }
     } catch (err) {
       console.error("[stripe-webhook] Error procesando pedido:", session.id, err);
       return NextResponse.json(

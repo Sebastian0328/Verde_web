@@ -1,36 +1,108 @@
 import { NextRequest, NextResponse } from "next/server";
 import { stripe } from "@/lib/stripe";
 import { getProductById } from "@/lib/products";
-import { storeConfig } from "@/lib/store-config";
+import { getProductsRows, getSettings } from "@/lib/google-sheets";
+import { isSlotAvailable } from "@/lib/availability";
 import { reservationSchema } from "@/lib/validators";
 import { ZodError } from "zod";
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-
     const parsed = reservationSchema.parse(body);
 
-    if (!storeConfig.reservationsOpen) {
+    const settings = await getSettings();
+
+    if (!settings.reservationsOpen) {
       return NextResponse.json(
         { error: "Las reservas están cerradas en este momento." },
         { status: 403 }
       );
     }
 
-    // Validar cada item en el backend (la fuente de verdad siempre es el servidor)
+    // Validate date: not today, not past, respects minLeadDays
+    const today = new Date().toISOString().slice(0, 10);
+    if (parsed.reservationDate <= today) {
+      return NextResponse.json(
+        { error: "No puedes reservar para hoy. La primera fecha disponible es mañana." },
+        { status: 400 }
+      );
+    }
+
+    const minDate = new Date();
+    minDate.setDate(minDate.getDate() + settings.minLeadDays);
+    const minDateStr = minDate.toISOString().slice(0, 10);
+    if (parsed.reservationDate < minDateStr) {
+      return NextResponse.json(
+        { error: `Debes reservar con al menos ${settings.minLeadDays} día(s) de antelación.` },
+        { status: 400 }
+      );
+    }
+
+    // Validate delivery fields when method is "delivery"
+    if (parsed.deliveryMethod !== "pickup") {
+      if (!parsed.deliveryAddress || parsed.deliveryAddress.trim().length < 5) {
+        return NextResponse.json(
+          { error: "Dirección de entrega requerida (mínimo 5 caracteres)." },
+          { status: 400 }
+        );
+      }
+      if (!parsed.postalCode || parsed.postalCode.trim().length < 1) {
+        return NextResponse.json(
+          { error: "Código postal requerido." },
+          { status: 400 }
+        );
+      }
+    }
+
+    // Validate slot availability (backend is source of truth)
+    const slotOk = await isSlotAvailable(
+      parsed.reservationDate,
+      parsed.reservationTime
+    );
+    if (!slotOk) {
+      return NextResponse.json(
+        { error: "Ese horario acaba de agotarse. Elige otro horario disponible." },
+        { status: 409 }
+      );
+    }
+
+    // Validate products — Google Sheets first, static fallback
+    let sheetsProducts: Awaited<ReturnType<typeof getProductsRows>> = [];
+    try {
+      sheetsProducts = await getProductsRows();
+    } catch {
+      // continue with static fallback
+    }
+
     const validatedItems = parsed.items.map((item) => {
-      const product = getProductById(item.productId);
-      if (!product) {
-        throw new Error(`Producto ${item.productId} no encontrado`);
+      const sheetProduct = sheetsProducts.find((p) => p.productId === item.productId);
+      if (sheetProduct) {
+        if (!sheetProduct.available) throw new Error(`${sheetProduct.name} no está disponible`);
+        return {
+          product: {
+            id: sheetProduct.productId,
+            name: sheetProduct.name,
+            finalPrice: sheetProduct.finalPrice,
+            depositAmount: sheetProduct.depositAmount,
+          },
+          quantity: item.quantity,
+        };
       }
-      if (!product.available) {
-        throw new Error(`${product.name} no está disponible`);
-      }
-      return { product, quantity: item.quantity };
+      const staticProduct = getProductById(item.productId);
+      if (!staticProduct) throw new Error(`Producto ${item.productId} no encontrado`);
+      if (!staticProduct.available) throw new Error(`${staticProduct.name} no está disponible`);
+      return {
+        product: {
+          id: staticProduct.id,
+          name: staticProduct.name,
+          finalPrice: staticProduct.finalPrice,
+          depositAmount: staticProduct.depositAmount,
+        },
+        quantity: item.quantity,
+      };
     });
 
-    // Calcular totales en el backend
     const totalDeposit = validatedItems.reduce(
       (s, { product, quantity }) => s + product.depositAmount * quantity,
       0
@@ -42,13 +114,12 @@ export async function POST(req: NextRequest) {
     const totalPending = totalFinal - totalDeposit;
     const totalItems = validatedItems.reduce((s, { quantity }) => s + quantity, 0);
 
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+    const appUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
 
-    // Una línea de Stripe por producto — transparente en el checkout
     const lineItems = validatedItems.map(({ product, quantity }) => ({
       price_data: {
-        currency: storeConfig.currency,
-        unit_amount: product.depositAmount * 100,
+        currency: settings.currency,
+        unit_amount: Math.round(product.depositAmount * 100),
         product_data: {
           name: `Reserva — ${product.name}`,
           description: `${quantity} × ${product.finalPrice} €. Resto al recoger.`,
@@ -57,7 +128,6 @@ export async function POST(req: NextRequest) {
       quantity,
     }));
 
-    // Serializar items para metadata (Stripe limita 500 chars por valor)
     const itemsMeta = JSON.stringify(
       validatedItems.map(({ product, quantity }) => ({
         id: product.id,
@@ -70,15 +140,21 @@ export async function POST(req: NextRequest) {
 
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
-      currency: storeConfig.currency,
+      currency: settings.currency,
       line_items: lineItems,
       metadata: {
         items: itemsMeta,
-        deliveryDay: parsed.deliveryDay,
+        reservationDate: parsed.reservationDate,
+        reservationTime: parsed.reservationTime,
         customerName: parsed.customerName,
         email: parsed.email,
         phone: parsed.phone,
         notes: parsed.notes ?? "",
+        deliveryMethod: parsed.deliveryMethod ?? "delivery",
+        deliveryAddress: parsed.deliveryAddress ?? "",
+        deliveryDetails: parsed.deliveryDetails ?? "",
+        postalCode: parsed.postalCode ?? "",
+        deliveryZone: parsed.deliveryZone ?? "",
         totalItems: String(totalItems),
         totalFinal: String(totalFinal),
         totalDeposit: String(totalDeposit),
@@ -97,11 +173,9 @@ export async function POST(req: NextRequest) {
         { status: 422 }
       );
     }
-
     if (error instanceof Error) {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
-
     console.error("[create-checkout-session]", error);
     return NextResponse.json(
       { error: "Error interno del servidor." },

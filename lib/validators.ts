@@ -10,16 +10,22 @@ const cartItemSchema = z.object({
     .max(storeConfig.maxQuantityPerOrder, `Máximo ${storeConfig.maxQuantityPerOrder} por producto`),
 });
 
+const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+const TIME_REGEX = /^\d{2}:\d{2}$/;
+
 export const reservationSchema = z.object({
   items: z.array(cartItemSchema).min(1, "Añade al menos un producto"),
-  deliveryDay: z.enum(
-    storeConfig.deliveryDays as [string, ...string[]],
-    { errorMap: () => ({ message: "Día de entrega no válido" }) }
-  ),
+  reservationDate: z.string().regex(DATE_REGEX, "Fecha inválida (YYYY-MM-DD)"),
+  reservationTime: z.string().regex(TIME_REGEX, "Hora inválida (HH:mm)"),
   customerName: z.string().min(2, "Nombre requerido"),
   email: z.string().email("Email no válido"),
   phone: z.string().min(6, "Teléfono/WhatsApp requerido"),
   notes: z.string().max(500).optional(),
+  deliveryMethod: z.enum(["delivery", "pickup"]).default("delivery"),
+  deliveryAddress: z.string().max(300).optional().or(z.literal("")),
+  deliveryDetails: z.string().max(500).optional().or(z.literal("")),
+  postalCode: z.string().max(20).optional().or(z.literal("")),
+  deliveryZone: z.string().max(100).optional().or(z.literal("")),
 });
 
 export type ReservationInput = z.infer<typeof reservationSchema>;
