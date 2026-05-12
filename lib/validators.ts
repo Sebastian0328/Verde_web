@@ -1,14 +1,17 @@
 import { z } from "zod";
 import { storeConfig } from "./store-config";
 
-// Schema para el formulario de reserva
-export const reservationSchema = z.object({
-  productId: z.string().min(1, "Producto requerido"),
+const cartItemSchema = z.object({
+  productId: z.string().min(1),
   quantity: z
     .number()
     .int()
-    .min(1, "La cantidad mínima es 1")
-    .max(storeConfig.maxQuantityPerOrder, `Máximo ${storeConfig.maxQuantityPerOrder} unidades`),
+    .min(1)
+    .max(storeConfig.maxQuantityPerOrder, `Máximo ${storeConfig.maxQuantityPerOrder} por producto`),
+});
+
+export const reservationSchema = z.object({
+  items: z.array(cartItemSchema).min(1, "Añade al menos un producto"),
   deliveryDay: z.enum(
     storeConfig.deliveryDays as [string, ...string[]],
     { errorMap: () => ({ message: "Día de entrega no válido" }) }
@@ -21,7 +24,6 @@ export const reservationSchema = z.object({
 
 export type ReservationInput = z.infer<typeof reservationSchema>;
 
-// Schema para la lista de espera
 export const waitlistSchema = z.object({
   name: z.string().min(2, "Nombre requerido"),
   email: z.string().email("Email no válido").optional().or(z.literal("")),

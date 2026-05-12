@@ -1,36 +1,51 @@
 export default function HowItWorks() {
   const steps = [
     {
-      number: "1",
+      number: "01",
       title: "Elige tu bolón",
       description: "Selecciona el producto, la cantidad y el día de entrega.",
     },
     {
-      number: "2",
+      number: "02",
       title: "Paga 1 € de reserva",
       description:
         "Confirmamos tu pedido con un abono de 1 €. El resto lo pagas cuando recoges.",
     },
     {
-      number: "3",
-      title: "Recibe tu pedido el fin de semana",
+      number: "03",
+      title: "Recibe el fin de semana",
       description:
         "Te avisamos por WhatsApp para coordinar la entrega. Sin colas, sin sorpresas.",
     },
   ];
 
   return (
-    <section className="py-12 px-4 bg-gray-50">
-      <div className="max-w-3xl mx-auto">
-        <h2 className="text-2xl font-semibold text-gray-900 mb-8 text-center">
-          Cómo funciona
-        </h2>
-        <div className="grid gap-6 sm:grid-cols-3">
-          {steps.map((step) => (
-            <div key={step.number} className="bg-white rounded-lg p-6 border border-gray-200">
-              <div className="text-3xl font-bold text-gray-300 mb-3">{step.number}</div>
-              <h3 className="font-semibold text-gray-900 mb-2">{step.title}</h3>
-              <p className="text-sm text-gray-600">{step.description}</p>
+    <section className="py-24 px-6 bg-negro">
+      <div className="max-w-4xl mx-auto">
+        <div className="mb-16">
+          <p className="text-crema/30 text-[10px] font-medium tracking-[0.4em] uppercase mb-3">
+            El proceso
+          </p>
+          <h2 className="text-crema text-3xl sm:text-4xl font-bold tracking-tight">
+            Cómo funciona
+          </h2>
+        </div>
+
+        <div className="grid sm:grid-cols-3 divide-y divide-crema/10 sm:divide-y-0 sm:divide-x sm:divide-crema/10">
+          {steps.map((step, i) => (
+            <div
+              key={step.number}
+              className={`py-8 sm:py-0 ${i > 0 ? "sm:pl-10" : ""} ${i < steps.length - 1 ? "sm:pr-10" : ""}`}
+            >
+              <p className="text-crema/18 text-xs font-medium tracking-widest mb-6">
+                {step.number}
+              </p>
+              <h3 className="text-crema text-base font-semibold mb-3 leading-snug">
+                {step.title}
+              </h3>
+              <p className="text-crema/45 text-sm leading-relaxed">
+                {step.description}
+              </p>
             </div>
           ))}
         </div>

@@ -2,8 +2,51 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Variables de diseño — se rellenarán cuando llegue el branding */
 :root {
-  /* --color-brand-primary: #...;  */
-  /* --font-heading: '...';        */
+  --color-verde-bosque: #2E4F20;
+  --color-verde-platano: #509234;
+  --color-oro: #FFBC23;
+  --color-crema: #F5EDD8;
+  --color-tierra: #9A4F0D;
+  --color-negro: #1A1A1A;
+}
+
+@layer base {
+  body {
+    background-color: #F5EDD8;
+    color: #1A1A1A;
+  }
+
+  ::selection {
+    background-color: #FFBC23;
+    color: #1A1A1A;
+  }
+
+  * {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+@layer utilities {
+  .animation-delay-100 {
+    animation-delay: 100ms;
+    animation-fill-mode: both;
+  }
+  .animation-delay-200 {
+    animation-delay: 200ms;
+    animation-fill-mode: both;
+  }
+  .animation-delay-300 {
+    animation-delay: 300ms;
+    animation-fill-mode: both;
+  }
+  .animation-delay-400 {
+    animation-delay: 400ms;
+    animation-fill-mode: both;
+  }
+  .animation-delay-500 {
+    animation-delay: 500ms;
+    animation-fill-mode: both;
+  }
 }

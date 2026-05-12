@@ -9,13 +9,8 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
 
-    // Validar los datos del formulario
-    const parsed = reservationSchema.parse({
-      ...body,
-      quantity: Number(body.quantity),
-    });
+    const parsed = reservationSchema.parse(body);
 
-    // Verificar que las reservas estén abiertas
     if (!storeConfig.reservationsOpen) {
       return NextResponse.json(
         { error: "Las reservas están cerradas en este momento." },
@@ -23,53 +18,71 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Buscar el producto en el catálogo (fuente de verdad = backend)
-    const product = getProductById(parsed.productId);
-    if (!product) {
-      return NextResponse.json({ error: "Producto no encontrado." }, { status: 404 });
-    }
+    // Validar cada item en el backend (la fuente de verdad siempre es el servidor)
+    const validatedItems = parsed.items.map((item) => {
+      const product = getProductById(item.productId);
+      if (!product) {
+        throw new Error(`Producto ${item.productId} no encontrado`);
+      }
+      if (!product.available) {
+        throw new Error(`${product.name} no está disponible`);
+      }
+      return { product, quantity: item.quantity };
+    });
 
-    if (!product.available) {
-      return NextResponse.json({ error: "Este producto no está disponible." }, { status: 400 });
-    }
-
-    // Calcular precios en el backend — nunca confiar en valores del frontend
-    const depositPaid = product.depositAmount * parsed.quantity;
-    const finalPrice = product.finalPrice * parsed.quantity;
-    const pendingAmount = finalPrice - depositPaid;
+    // Calcular totales en el backend
+    const totalDeposit = validatedItems.reduce(
+      (s, { product, quantity }) => s + product.depositAmount * quantity,
+      0
+    );
+    const totalFinal = validatedItems.reduce(
+      (s, { product, quantity }) => s + product.finalPrice * quantity,
+      0
+    );
+    const totalPending = totalFinal - totalDeposit;
+    const totalItems = validatedItems.reduce((s, { quantity }) => s + quantity, 0);
 
     const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
 
-    // Crear sesión de Stripe Checkout
+    // Una línea de Stripe por producto — transparente en el checkout
+    const lineItems = validatedItems.map(({ product, quantity }) => ({
+      price_data: {
+        currency: storeConfig.currency,
+        unit_amount: product.depositAmount * 100,
+        product_data: {
+          name: `Reserva — ${product.name}`,
+          description: `${quantity} × ${product.finalPrice} €. Resto al recoger.`,
+        },
+      },
+      quantity,
+    }));
+
+    // Serializar items para metadata (Stripe limita 500 chars por valor)
+    const itemsMeta = JSON.stringify(
+      validatedItems.map(({ product, quantity }) => ({
+        id: product.id,
+        name: product.name,
+        qty: quantity,
+        price: product.finalPrice,
+        deposit: product.depositAmount,
+      }))
+    );
+
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       currency: storeConfig.currency,
-      line_items: [
-        {
-          price_data: {
-            currency: storeConfig.currency,
-            unit_amount: depositPaid * 100, // Stripe trabaja en céntimos
-            product_data: {
-              name: `Reserva — ${product.name} x${parsed.quantity}`,
-              description: `Abono de reserva. Al recoger pagarás ${pendingAmount} € más.`,
-            },
-          },
-          quantity: 1,
-        },
-      ],
-      // Guardar toda la info del pedido en metadata para recuperarla en el webhook
+      line_items: lineItems,
       metadata: {
-        productId: product.id,
-        productName: product.name,
-        quantity: String(parsed.quantity),
+        items: itemsMeta,
         deliveryDay: parsed.deliveryDay,
         customerName: parsed.customerName,
         email: parsed.email,
         phone: parsed.phone,
         notes: parsed.notes ?? "",
-        finalPrice: String(finalPrice),
-        depositPaid: String(depositPaid),
-        pendingAmount: String(pendingAmount),
+        totalItems: String(totalItems),
+        totalFinal: String(totalFinal),
+        totalDeposit: String(totalDeposit),
+        totalPending: String(totalPending),
       },
       customer_email: parsed.email,
       success_url: `${appUrl}/gracias?session_id={CHECKOUT_SESSION_ID}`,
@@ -83,6 +96,10 @@ export async function POST(req: NextRequest) {
         { error: "Datos inválidos.", details: error.flatten().fieldErrors },
         { status: 422 }
       );
+    }
+
+    if (error instanceof Error) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
     }
 
     console.error("[create-checkout-session]", error);

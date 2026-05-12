@@ -4,8 +4,15 @@ import { appendOrderToSheet } from "@/lib/google-sheets";
 import { sendConfirmationToCustomer, sendInternalOrderNotification } from "@/lib/email";
 import Stripe from "stripe";
 
-// Next.js App Router: necesitamos el body crudo para verificar la firma de Stripe
 export const runtime = "nodejs";
+
+interface ItemMeta {
+  id: string;
+  name: string;
+  qty: number;
+  price: number;
+  deposit: number;
+}
 
 export async function POST(req: NextRequest) {
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -19,7 +26,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Firma faltante." }, { status: 400 });
   }
 
-  // Leer el body como buffer para verificar la firma criptográfica
   const rawBody = await req.text();
 
   let event: Stripe.Event;
@@ -30,7 +36,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Firma inválida." }, { status: 400 });
   }
 
-  // Solo procesamos pedidos completados
   if (event.type === "checkout.session.completed") {
     const session = event.data.object as Stripe.Checkout.Session;
     const meta = session.metadata;
@@ -40,48 +45,66 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Metadata vacía." }, { status: 400 });
     }
 
-    const orderData = {
-      customerName: meta.customerName,
-      email: meta.email,
-      phone: meta.phone,
-      productName: meta.productName,
-      quantity: Number(meta.quantity),
-      deliveryDay: meta.deliveryDay,
-      depositPaid: Number(meta.depositPaid),
-      pendingAmount: Number(meta.pendingAmount),
-      notes: meta.notes,
-    };
+    let items: ItemMeta[] = [];
+    try {
+      items = JSON.parse(meta.items ?? "[]");
+    } catch {
+      console.error("[stripe-webhook] Error parseando items:", session.id);
+    }
+
+    const totalDeposit = Number(meta.totalDeposit);
+    const totalPending = Number(meta.totalPending);
+    const totalFinal = Number(meta.totalFinal);
 
     try {
-      // 1. Guardar en Google Sheets
-      // Nota: si el webhook se reintenta (fallo de red, timeout), se insertará de nuevo.
-      // Para evitar duplicados en producción, se recomienda verificar si session.id ya existe
-      // en la hoja antes de insertar. Sin BD, esto requiere una búsqueda previa en la API.
-      await appendOrderToSheet({
-        createdAt: new Date().toISOString(),
-        status: "confirmado",
-        stripeSessionId: session.id,
+      // Una fila en Google Sheets por cada producto del pedido
+      for (const item of items) {
+        await appendOrderToSheet({
+          createdAt: new Date().toISOString(),
+          status: "confirmado",
+          stripeSessionId: session.id,
+          customerName: meta.customerName,
+          email: meta.email,
+          phone: meta.phone,
+          productId: item.id,
+          productName: item.name,
+          quantity: item.qty,
+          deliveryDay: meta.deliveryDay,
+          notes: meta.notes ?? "",
+          finalPrice: item.price * item.qty,
+          depositPaid: item.deposit * item.qty,
+          pendingAmount: (item.price - item.deposit) * item.qty,
+        });
+      }
+
+      const emailItems = items.map((item) => ({
+        productName: item.name,
+        quantity: item.qty,
+        finalPrice: item.price,
+      }));
+
+      await sendConfirmationToCustomer({
         customerName: meta.customerName,
         email: meta.email,
         phone: meta.phone,
-        productId: meta.productId,
-        productName: meta.productName,
-        quantity: Number(meta.quantity),
+        items: emailItems,
         deliveryDay: meta.deliveryDay,
-        notes: meta.notes ?? "",
-        finalPrice: Number(meta.finalPrice),
-        depositPaid: Number(meta.depositPaid),
-        pendingAmount: Number(meta.pendingAmount),
+        depositPaid: totalDeposit,
+        pendingAmount: totalPending,
+        notes: meta.notes,
       });
 
-      // 2. Email de confirmación al cliente
-      await sendConfirmationToCustomer(orderData);
-
-      // 3. Email interno al equipo de Verde
-      await sendInternalOrderNotification(orderData);
+      await sendInternalOrderNotification({
+        customerName: meta.customerName,
+        email: meta.email,
+        phone: meta.phone,
+        items: emailItems,
+        deliveryDay: meta.deliveryDay,
+        depositPaid: totalDeposit,
+        pendingAmount: totalPending,
+        notes: meta.notes,
+      });
     } catch (err) {
-      // Registrar el error pero devolver 200 para que Stripe no reintente
-      // inmediatamente. El pedido quedará pendiente de revisión manual.
       console.error("[stripe-webhook] Error procesando pedido:", session.id, err);
       return NextResponse.json(
         { error: "Error al procesar el pedido. Requiere revisión manual." },
@@ -90,6 +113,5 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Responder 200 para todos los demás eventos (Stripe espera este OK)
   return NextResponse.json({ received: true });
 }

@@ -3,6 +3,12 @@
 import { useState } from "react";
 import clsx from "clsx";
 
+const inputClass =
+  "w-full border-0 border-b border-crema/20 bg-transparent px-0 py-2.5 text-sm text-crema placeholder:text-crema/25 focus:outline-none focus:border-crema/55 transition-colors duration-200";
+
+const labelClass =
+  "block text-[10px] font-medium uppercase tracking-[0.2em] text-crema/38 mb-2";
+
 export default function WaitlistForm() {
   const [form, setForm] = useState({ name: "", email: "", phone: "", message: "" });
   const [loading, setLoading] = useState(false);
@@ -45,9 +51,11 @@ export default function WaitlistForm() {
 
   if (success) {
     return (
-      <div className="bg-gray-50 border border-gray-200 rounded-lg p-6 text-center">
-        <p className="font-semibold text-gray-900 mb-1">¡Anotado!</p>
-        <p className="text-sm text-gray-600">
+      <div className="py-6">
+        <p className="text-oro text-[10px] font-medium tracking-[0.35em] uppercase mb-2">
+          ¡Anotado!
+        </p>
+        <p className="text-crema/55 text-sm leading-relaxed">
           Te avisaremos por WhatsApp cuando abran los próximos cupos.
         </p>
       </div>
@@ -55,9 +63,9 @@ export default function WaitlistForm() {
   }
 
   return (
-    <form onSubmit={handleSubmit} noValidate className="space-y-4">
+    <form onSubmit={handleSubmit} noValidate className="space-y-7">
       <div>
-        <label htmlFor="wl-name" className="block text-sm font-medium text-gray-700 mb-1">
+        <label htmlFor="wl-name" className={labelClass}>
           Nombre
         </label>
         <input
@@ -68,12 +76,12 @@ export default function WaitlistForm() {
           placeholder="Tu nombre"
           value={form.name}
           onChange={handleChange}
-          className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
+          className={inputClass}
         />
       </div>
 
       <div>
-        <label htmlFor="wl-phone" className="block text-sm font-medium text-gray-700 mb-1">
+        <label htmlFor="wl-phone" className={labelClass}>
           WhatsApp
         </label>
         <input
@@ -84,12 +92,12 @@ export default function WaitlistForm() {
           placeholder="+34 600 000 000"
           value={form.phone}
           onChange={handleChange}
-          className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
+          className={inputClass}
         />
       </div>
 
       <div>
-        <label htmlFor="wl-email" className="block text-sm font-medium text-gray-700 mb-1">
+        <label htmlFor="wl-email" className={labelClass}>
           Email (opcional)
         </label>
         <input
@@ -99,41 +107,33 @@ export default function WaitlistForm() {
           placeholder="tu@email.com"
           value={form.email}
           onChange={handleChange}
-          className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
-        />
-      </div>
-
-      <div>
-        <label htmlFor="wl-message" className="block text-sm font-medium text-gray-700 mb-1">
-          Mensaje (opcional)
-        </label>
-        <textarea
-          id="wl-message"
-          name="message"
-          rows={2}
-          placeholder="¿Algo que quieras decirnos?"
-          value={form.message}
-          onChange={handleChange}
-          className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 resize-none"
+          className={inputClass}
         />
       </div>
 
       {error && (
-        <p className="text-red-600 text-sm bg-red-50 border border-red-200 rounded-md px-3 py-2">
-          {error}
-        </p>
+        <div className="border-l-2 border-tierra/40 pl-4 py-1">
+          <p className="text-crema/55 text-sm">{error}</p>
+        </div>
       )}
 
-      <button
-        type="submit"
-        disabled={loading}
-        className={clsx(
-          "w-full bg-gray-900 text-white font-medium py-3 px-6 rounded-md text-sm transition-colors",
-          loading ? "opacity-60 cursor-not-allowed" : "hover:bg-gray-700"
-        )}
-      >
-        {loading ? "Guardando..." : "Avisarme primero"}
-      </button>
+      <div className="pt-2">
+        <button
+          type="submit"
+          disabled={loading}
+          className={clsx(
+            "w-full border border-oro/45 text-oro text-[11px] font-semibold tracking-[0.22em] uppercase py-4 px-6 transition-all duration-300 flex items-center justify-center gap-3",
+            loading
+              ? "opacity-60 cursor-not-allowed"
+              : "hover:bg-oro hover:text-negro hover:border-oro"
+          )}
+        >
+          {loading && (
+            <span className="w-4 h-4 border border-oro/30 border-t-oro rounded-full animate-spin shrink-0" />
+          )}
+          {loading ? "Guardando..." : "Avisarme primero"}
+        </button>
+      </div>
     </form>
   );
 }

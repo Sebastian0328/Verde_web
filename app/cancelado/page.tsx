@@ -1,20 +1,31 @@
 export default function CanceladoPage() {
   return (
-    <section className="py-16 px-4">
-      <div className="max-w-md mx-auto text-center">
-        <div className="text-5xl mb-6">↩️</div>
-        <h1 className="text-3xl font-bold text-gray-900 mb-3">
-          Reserva cancelada
+    <section className="min-h-screen bg-crema flex items-center justify-center px-6 py-16">
+      <div className="max-w-md mx-auto">
+        <p className="text-negro/28 text-[10px] font-medium tracking-[0.4em] uppercase mb-4">
+          Sin cobrar
+        </p>
+        <h1 className="text-verde-bosque text-4xl sm:text-5xl font-bold tracking-tight leading-tight mb-6">
+          Sin cobrar,<br />sin drama.
         </h1>
-        <p className="text-gray-600 mb-8">
+        <p className="text-negro/50 text-base leading-relaxed mb-14">
           No te hemos cobrado nada. Puedes volver a intentarlo cuando quieras.
         </p>
-        <a
-          href="/#reservar"
-          className="inline-block bg-gray-900 text-white font-medium px-6 py-2.5 rounded-md text-sm hover:bg-gray-700 transition-colors"
-        >
-          Volver a intentar
-        </a>
+
+        <div className="flex flex-col sm:flex-row gap-4">
+          <a
+            href="/#reservar"
+            className="inline-block bg-verde-bosque text-crema text-[11px] font-semibold tracking-[0.22em] uppercase px-8 py-4 hover:bg-verde-platano transition-all duration-300 text-center"
+          >
+            Volver a intentar
+          </a>
+          <a
+            href="/"
+            className="inline-block border border-negro/18 text-negro/50 text-[11px] font-semibold tracking-[0.22em] uppercase px-8 py-4 hover:border-negro/35 hover:text-negro transition-all duration-300 text-center"
+          >
+            Ir al inicio
+          </a>
+        </div>
       </div>
     </section>
   );

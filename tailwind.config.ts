@@ -8,16 +8,27 @@ const config: Config = {
   ],
   theme: {
     extend: {
-      // Aquí irán los colores, tipografías e identidad visual de VERDE
-      // cuando el branding esté listo
       colors: {
-        brand: {
-          // primary: "#...",
-          // accent: "#...",
+        verde: {
+          bosque: "#2E4F20",
+          platano: "#509234",
         },
+        oro: "#FFBC23",
+        crema: "#F5EDD8",
+        tierra: "#9A4F0D",
+        negro: "#1A1A1A",
       },
       fontFamily: {
-        // sans: ["..."],
+        sans: ["var(--font-arimo)", "Arial", "sans-serif"],
+      },
+      animation: {
+        "fade-in": "fadeIn 0.9s ease-out forwards",
+      },
+      keyframes: {
+        fadeIn: {
+          "0%": { opacity: "0", transform: "translateY(14px)" },
+          "100%": { opacity: "1", transform: "translateY(0)" },
+        },
       },
     },
   },

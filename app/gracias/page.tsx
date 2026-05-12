@@ -4,25 +4,36 @@ interface GraciasPageProps {
   searchParams: { session_id?: string };
 }
 
+interface ItemMeta {
+  id: string;
+  name: string;
+  qty: number;
+  price: number;
+  deposit: number;
+}
+
 export default async function GraciasPage({ searchParams }: GraciasPageProps) {
   const sessionId = searchParams.session_id;
 
   let customerName = "";
-  let productName = "";
   let deliveryDay = "";
-  let depositPaid = "";
-  let pendingAmount = "";
+  let totalDeposit = "";
+  let totalPending = "";
+  let items: ItemMeta[] = [];
 
-  // Recuperar datos de la sesión para mostrar resumen al cliente
   if (sessionId) {
     try {
       const session = await stripe.checkout.sessions.retrieve(sessionId);
       if (session.metadata) {
         customerName = session.metadata.customerName ?? "";
-        productName = session.metadata.productName ?? "";
         deliveryDay = session.metadata.deliveryDay ?? "";
-        depositPaid = session.metadata.depositPaid ?? "";
-        pendingAmount = session.metadata.pendingAmount ?? "";
+        totalDeposit = session.metadata.totalDeposit ?? "";
+        totalPending = session.metadata.totalPending ?? "";
+        try {
+          items = JSON.parse(session.metadata.items ?? "[]");
+        } catch {
+          items = [];
+        }
       }
     } catch {
       // Si falla la recuperación, mostramos la página igualmente sin detalles
@@ -30,55 +41,87 @@ export default async function GraciasPage({ searchParams }: GraciasPageProps) {
   }
 
   return (
-    <section className="py-16 px-4">
-      <div className="max-w-md mx-auto text-center">
-        <div className="text-5xl mb-6">🎉</div>
-        <h1 className="text-3xl font-bold text-gray-900 mb-3">
-          ¡Reserva confirmada!
-        </h1>
-        <p className="text-gray-600 mb-8">
-          Gracias{customerName ? `, ${customerName}` : ""}. Tu pedido está
-          confirmado y pronto te escribiremos por WhatsApp para coordinar la
-          entrega.
-        </p>
+    <section className="min-h-screen bg-verde-bosque flex items-center justify-center px-6 py-16">
+      <div className="max-w-lg mx-auto w-full">
+        <div className="mb-14">
+          <div className="flex justify-start mb-8" aria-hidden="true">
+            <svg width="22" height="22" viewBox="0 0 100 100" fill="none">
+              <path d="M22 74 C16 58 19 28 42 14 C62 2 79 12 84 30 C87 44 79 60 64 68 C49 76 28 84 22 74Z" fill="#FFBC23"/>
+            </svg>
+          </div>
 
-        {productName && (
-          <div className="bg-gray-50 border border-gray-200 rounded-lg p-5 text-left text-sm mb-8">
-            <h2 className="font-semibold text-gray-900 mb-3">Tu pedido</h2>
-            <div className="space-y-2 text-gray-700">
-              <div className="flex justify-between">
-                <span className="text-gray-500">Producto</span>
-                <span>{productName}</span>
+          <p className="text-crema/30 text-[10px] font-medium tracking-[0.4em] uppercase mb-4">
+            Pedido confirmado
+          </p>
+          <h1 className="text-crema text-4xl sm:text-5xl font-bold tracking-tight leading-tight mb-6">
+            Reserva confirmada
+          </h1>
+          <p className="text-crema/55 text-base leading-relaxed">
+            Gracias{customerName ? `, ${customerName}` : ""}. Tu pedido está
+            confirmado y pronto te escribiremos por WhatsApp para coordinar la
+            entrega.
+          </p>
+        </div>
+
+        {(items.length > 0 || deliveryDay) && (
+          <div className="border-t border-crema/12 py-10 mb-10">
+            <p className="text-[10px] font-medium tracking-[0.2em] uppercase text-crema/28 mb-6">
+              Tu pedido
+            </p>
+
+            {/* Lista de productos */}
+            {items.length > 0 && (
+              <div className="space-y-3 mb-6">
+                {items.map((item) => (
+                  <div key={item.id} className="flex justify-between items-baseline">
+                    <span className="text-crema/65 text-sm">
+                      {item.name}{" "}
+                      <span className="text-crema/35">×{item.qty}</span>
+                    </span>
+                    <span className="text-crema/65 text-sm">
+                      {item.price * item.qty} €
+                    </span>
+                  </div>
+                ))}
               </div>
+            )}
+
+            <div className="space-y-3 border-t border-crema/12 pt-4">
               {deliveryDay && (
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Día de entrega</span>
-                  <span className="capitalize">{deliveryDay}</span>
+                <div className="flex justify-between items-baseline">
+                  <span className="text-[10px] font-medium uppercase tracking-wider text-crema/32">
+                    Entrega
+                  </span>
+                  <span className="text-crema/75 text-sm capitalize">{deliveryDay}</span>
                 </div>
               )}
-              {depositPaid && (
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Reserva pagada</span>
-                  <span className="font-medium">{depositPaid} €</span>
+              {totalDeposit && (
+                <div className="flex justify-between items-baseline">
+                  <span className="text-[10px] font-medium uppercase tracking-wider text-crema/32">
+                    Reserva pagada
+                  </span>
+                  <span className="font-semibold text-oro text-sm">{totalDeposit} €</span>
                 </div>
               )}
-              {pendingAmount && (
-                <div className="flex justify-between border-t border-gray-200 pt-2 mt-2">
-                  <span className="text-gray-500">Pendiente al recoger</span>
-                  <span className="font-semibold text-gray-900">{pendingAmount} €</span>
+              {totalPending && (
+                <div className="flex justify-between items-baseline border-t border-crema/10 pt-3">
+                  <span className="text-[10px] font-medium uppercase tracking-wider text-crema/32">
+                    Pendiente al recoger
+                  </span>
+                  <span className="font-semibold text-crema text-sm">{totalPending} €</span>
                 </div>
               )}
             </div>
           </div>
         )}
 
-        <p className="text-sm text-gray-500 mb-6">
-          También recibirás un correo de confirmación.
+        <p className="text-[10px] font-medium text-crema/22 uppercase tracking-wider mb-10">
+          También recibirás un correo de confirmación
         </p>
 
         <a
           href="/"
-          className="inline-block bg-gray-900 text-white font-medium px-6 py-2.5 rounded-md text-sm hover:bg-gray-700 transition-colors"
+          className="inline-block border border-crema/28 text-crema text-[11px] font-semibold tracking-[0.22em] uppercase px-8 py-4 hover:bg-crema hover:text-verde-bosque transition-all duration-300"
         >
           Volver al inicio
         </a>

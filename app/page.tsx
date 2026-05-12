@@ -1,3 +1,4 @@
+import Image from "next/image";
 import { getAvailableProducts } from "@/lib/products";
 import { storeConfig } from "@/lib/store-config";
 import HowItWorks from "@/components/HowItWorks";
@@ -10,26 +11,56 @@ export default function HomePage() {
   return (
     <>
       {/* Hero */}
-      <section className="px-4 py-16 text-center max-w-2xl mx-auto">
-        <h1 className="text-4xl font-bold text-gray-900 mb-4 tracking-tight">
-          Verde
-        </h1>
-        <p className="text-xl text-gray-700 mb-2">
-          Bolones hechos bajo pedido para disfrutar el fin de semana.
-        </p>
-        <p className="text-gray-500">
-          Reserva con <strong>1 €</strong> y lo descontamos del precio final
-          cuando recibas tu pedido.
-        </p>
+      <section className="relative min-h-screen bg-verde-bosque flex flex-col items-center justify-center px-6 py-24 text-center">
+        <div className="max-w-3xl mx-auto">
+          <p className="animate-fade-in text-crema/35 text-[10px] font-medium tracking-[0.45em] uppercase mb-10">
+            Madrid · Dark Kitchen
+          </p>
 
-        {storeConfig.reservationsOpen && (
-          <a
-            href="#reservar"
-            className="inline-block mt-8 bg-gray-900 text-white font-medium px-8 py-3 rounded-md text-sm hover:bg-gray-700 transition-colors"
-          >
-            Hacer mi reserva
-          </a>
-        )}
+          <div className="animate-fade-in animation-delay-100 flex justify-center mb-10">
+            <Image
+              src="/iconVerde.png"
+              alt="Verde"
+              width={260}
+              height={260}
+              priority
+            />
+          </div>
+
+          <p className="animate-fade-in animation-delay-200 text-crema/60 text-lg sm:text-xl font-normal max-w-xs mx-auto leading-relaxed mb-4">
+            Bolones hechos bajo pedido para disfrutar el fin de semana.
+          </p>
+
+          <p className="animate-fade-in animation-delay-200 text-crema/35 text-sm mb-14">
+            Reserva con{" "}
+            <span className="font-semibold text-oro">1 €</span>
+            {" "}· se descuenta del precio final.
+          </p>
+
+          <div className="animate-fade-in animation-delay-300">
+            {storeConfig.reservationsOpen ? (
+              <a
+                href="#reservar"
+                className="inline-block border border-crema/30 text-crema text-[11px] font-semibold tracking-[0.22em] uppercase px-10 py-4 hover:bg-crema hover:text-verde-bosque transition-all duration-300"
+              >
+                Hacer mi reserva
+              </a>
+            ) : (
+              <a
+                href="#waitlist"
+                className="inline-block border border-oro/40 text-oro text-[11px] font-semibold tracking-[0.22em] uppercase px-10 py-4 hover:bg-oro hover:text-negro transition-all duration-300"
+              >
+                Avisarme cuando abra
+              </a>
+            )}
+          </div>
+        </div>
+
+        <div className="absolute bottom-8 left-1/2 -translate-x-1/2 text-crema/20 animate-bounce" aria-hidden="true">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </div>
       </section>
 
       {/* Cómo funciona */}
@@ -37,7 +68,9 @@ export default function HomePage() {
 
       {/* Reserva o estado cerrado */}
       {storeConfig.reservationsOpen ? (
-        <ReservationForm products={products} config={storeConfig} />
+        <section className="bg-crema py-2" id="reservar">
+          <ReservationForm products={products} config={storeConfig} />
+        </section>
       ) : (
         <ClosedState message={storeConfig.closedMessage} />
       )}

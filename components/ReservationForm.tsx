@@ -11,9 +11,7 @@ interface ReservationFormProps {
   config: StoreConfig;
 }
 
-interface FormState {
-  productId: string;
-  quantity: string;
+interface FormFields {
   deliveryDay: string;
   customerName: string;
   email: string;
@@ -21,9 +19,7 @@ interface FormState {
   notes: string;
 }
 
-const INITIAL_STATE: FormState = {
-  productId: "",
-  quantity: "1",
+const INITIAL_FIELDS: FormFields = {
   deliveryDay: "",
   customerName: "",
   email: "",
@@ -31,26 +27,75 @@ const INITIAL_STATE: FormState = {
   notes: "",
 };
 
+const inputClass =
+  "w-full border-0 border-b border-negro/15 bg-transparent px-0 py-2.5 text-sm text-negro placeholder:text-negro/28 focus:outline-none focus:border-verde-bosque transition-colors duration-200";
+
+const labelClass =
+  "block text-[10px] font-medium uppercase tracking-[0.2em] text-negro/40 mb-2";
+
 export default function ReservationForm({ products, config }: ReservationFormProps) {
-  const [form, setForm] = useState<FormState>(INITIAL_STATE);
+  // cart: productId → quantity
+  const [cart, setCart] = useState<Record<string, number>>({});
+  const [fields, setFields] = useState<FormFields>(INITIAL_FIELDS);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const selectedProduct = products.find((p) => p.id === form.productId);
-
-  function handleChange(
-    e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>
-  ) {
-    setForm((prev) => ({ ...prev, [e.target.name]: e.target.value }));
+  // Cart helpers
+  function addToCart(productId: string) {
+    setCart((prev) => ({ ...prev, [productId]: 1 }));
     setError(null);
   }
+
+  function increment(productId: string) {
+    setCart((prev) => {
+      const current = prev[productId] ?? 0;
+      if (current >= config.maxQuantityPerOrder) return prev;
+      return { ...prev, [productId]: current + 1 };
+    });
+  }
+
+  function decrement(productId: string) {
+    setCart((prev) => {
+      const current = prev[productId] ?? 0;
+      if (current <= 1) {
+        const { [productId]: _, ...rest } = prev;
+        return rest;
+      }
+      return { ...prev, [productId]: current - 1 };
+    });
+  }
+
+  function handleFieldChange(
+    e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>
+  ) {
+    setFields((prev) => ({ ...prev, [e.target.name]: e.target.value }));
+    setError(null);
+  }
+
+  // Computed cart values
+  const cartProducts = products.filter((p) => (cart[p.id] ?? 0) > 0);
+  const totalItems = cartProducts.reduce((s, p) => s + (cart[p.id] ?? 0), 0);
+  const totalDeposit = cartProducts.reduce((s, p) => s + p.depositAmount * (cart[p.id] ?? 0), 0);
+  const totalFinal = cartProducts.reduce((s, p) => s + p.finalPrice * (cart[p.id] ?? 0), 0);
+  const totalPending = totalFinal - totalDeposit;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
 
-    if (!form.productId) return setError("Selecciona un producto.");
-    if (!form.deliveryDay) return setError("Elige un día de entrega.");
+    if (cartProducts.length === 0) {
+      setError("Añade al menos un producto a tu pedido.");
+      return;
+    }
+    if (!fields.deliveryDay) {
+      setError("Elige un día de entrega.");
+      return;
+    }
+
+    const itemsPayload = cartProducts.map((p) => ({
+      productId: p.id,
+      quantity: cart[p.id],
+    }));
 
     setLoading(true);
     try {
@@ -58,13 +103,12 @@ export default function ReservationForm({ products, config }: ReservationFormPro
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          productId: form.productId,
-          quantity: Number(form.quantity),
-          deliveryDay: form.deliveryDay,
-          customerName: form.customerName,
-          email: form.email,
-          phone: form.phone,
-          notes: form.notes,
+          items: itemsPayload,
+          deliveryDay: fields.deliveryDay,
+          customerName: fields.customerName,
+          email: fields.email,
+          phone: fields.phone,
+          notes: fields.notes,
         }),
       });
 
@@ -75,7 +119,6 @@ export default function ReservationForm({ products, config }: ReservationFormPro
         return;
       }
 
-      // Redirigir a Stripe Checkout
       if (data.url) window.location.href = data.url;
     } catch {
       setError("Error de conexión. Comprueba tu internet e inténtalo de nuevo.");
@@ -84,68 +127,71 @@ export default function ReservationForm({ products, config }: ReservationFormPro
     }
   }
 
-  const depositPreview =
-    selectedProduct ? selectedProduct.depositAmount * Number(form.quantity) : null;
-  const pendingPreview =
-    selectedProduct
-      ? selectedProduct.finalPrice * Number(form.quantity) - (depositPreview ?? 0)
-      : null;
-
   return (
-    <section className="py-12 px-4" id="reservar">
+    <section className="py-20 px-6" id="reservar">
       <div className="max-w-2xl mx-auto">
-        <h2 className="text-2xl font-semibold text-gray-900 mb-2">Reserva tu pedido</h2>
-        <p className="text-gray-600 mb-8">
-          Elige tu producto, rellena tus datos y paga 1 € para confirmar.
-        </p>
+        <div className="mb-14">
+          <p className="text-negro/30 text-[10px] font-medium tracking-[0.4em] uppercase mb-3">
+            Tu pedido
+          </p>
+          <h2 className="text-verde-bosque text-3xl sm:text-4xl font-bold tracking-tight mb-3">
+            Reserva tus bolones
+          </h2>
+          <p className="text-negro/50 text-sm leading-relaxed">
+            Añade uno o varios productos y paga{" "}
+            <span className="font-semibold text-tierra">1 € por unidad</span>{" "}
+            para confirmar. El resto lo abonás cuando recoges.
+          </p>
+        </div>
 
         <form onSubmit={handleSubmit} noValidate>
-          {/* Selección de producto */}
-          <fieldset className="mb-8">
-            <legend className="text-sm font-medium text-gray-700 mb-3">
-              Elige tu producto
-            </legend>
+
+          {/* 01 — Productos */}
+          <fieldset className="mb-10">
+            <legend className={clsx(labelClass, "mb-5")}>01 — Productos</legend>
             <div className="grid gap-4 sm:grid-cols-2">
               {products.map((product) => (
                 <ProductCard
                   key={product.id}
                   product={product}
-                  selected={form.productId === product.id}
-                  onSelect={(id) => setForm((prev) => ({ ...prev, productId: id }))}
+                  quantity={cart[product.id] ?? 0}
+                  maxQuantity={config.maxQuantityPerOrder}
+                  onAdd={addToCart}
+                  onIncrement={increment}
+                  onDecrement={decrement}
                 />
               ))}
             </div>
+
+            {/* Mini resumen del carrito */}
+            {cartProducts.length > 0 && (
+              <div className="mt-5 flex items-center justify-between border-t border-verde-bosque/15 pt-4">
+                <p className="text-sm text-verde-bosque/70">
+                  <span className="font-semibold text-verde-bosque">{totalItems}</span>{" "}
+                  {totalItems === 1 ? "unidad" : "unidades"} ·{" "}
+                  {cartProducts.length} {cartProducts.length === 1 ? "producto" : "productos"}
+                </p>
+                <p className="text-sm font-semibold text-verde-bosque">
+                  Abono: {totalDeposit} €
+                </p>
+              </div>
+            )}
           </fieldset>
 
-          {/* Cantidad y día */}
-          <div className="grid gap-4 sm:grid-cols-2 mb-6">
-            <div>
-              <label htmlFor="quantity" className="block text-sm font-medium text-gray-700 mb-1">
-                Cantidad
-              </label>
-              <input
-                id="quantity"
-                name="quantity"
-                type="number"
-                min={1}
-                max={config.maxQuantityPerOrder}
-                required
-                value={form.quantity}
-                onChange={handleChange}
-                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
-              />
-            </div>
-            <div>
-              <label htmlFor="deliveryDay" className="block text-sm font-medium text-gray-700 mb-1">
-                Día de entrega
+          {/* 02 — Entrega */}
+          <fieldset className="mb-10 pb-10 border-b border-negro/8">
+            <legend className={clsx(labelClass, "mb-5")}>02 — Día de entrega</legend>
+            <div className="max-w-xs">
+              <label htmlFor="deliveryDay" className={labelClass}>
+                Selecciona el día
               </label>
               <select
                 id="deliveryDay"
                 name="deliveryDay"
                 required
-                value={form.deliveryDay}
-                onChange={handleChange}
-                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
+                value={fields.deliveryDay}
+                onChange={handleFieldChange}
+                className={inputClass}
               >
                 <option value="">Seleccionar...</option>
                 {config.deliveryDays.map((day) => (
@@ -155,110 +201,136 @@ export default function ReservationForm({ products, config }: ReservationFormPro
                 ))}
               </select>
             </div>
-          </div>
+          </fieldset>
 
-          {/* Datos del cliente */}
-          <div className="grid gap-4 sm:grid-cols-2 mb-6">
-            <div>
-              <label htmlFor="customerName" className="block text-sm font-medium text-gray-700 mb-1">
-                Nombre completo
-              </label>
-              <input
-                id="customerName"
-                name="customerName"
-                type="text"
-                required
-                placeholder="Tu nombre"
-                value={form.customerName}
-                onChange={handleChange}
-                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
-              />
+          {/* 03 — Tus datos */}
+          <fieldset className="mb-10 pb-10 border-b border-negro/8">
+            <legend className={clsx(labelClass, "mb-5")}>03 — Tus datos</legend>
+            <div className="grid gap-8 sm:grid-cols-2">
+              <div>
+                <label htmlFor="customerName" className={labelClass}>
+                  Nombre completo
+                </label>
+                <input
+                  id="customerName"
+                  name="customerName"
+                  type="text"
+                  required
+                  placeholder="Tu nombre"
+                  value={fields.customerName}
+                  onChange={handleFieldChange}
+                  className={inputClass}
+                />
+              </div>
+              <div>
+                <label htmlFor="email" className={labelClass}>
+                  Email
+                </label>
+                <input
+                  id="email"
+                  name="email"
+                  type="email"
+                  required
+                  placeholder="tu@email.com"
+                  value={fields.email}
+                  onChange={handleFieldChange}
+                  className={inputClass}
+                />
+              </div>
+              <div>
+                <label htmlFor="phone" className={labelClass}>
+                  WhatsApp
+                </label>
+                <input
+                  id="phone"
+                  name="phone"
+                  type="tel"
+                  required
+                  placeholder="+34 600 000 000"
+                  value={fields.phone}
+                  onChange={handleFieldChange}
+                  className={inputClass}
+                />
+              </div>
             </div>
-            <div>
-              <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
-                Email
-              </label>
-              <input
-                id="email"
-                name="email"
-                type="email"
-                required
-                placeholder="tu@email.com"
-                value={form.email}
-                onChange={handleChange}
-                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
-              />
-            </div>
-            <div>
-              <label htmlFor="phone" className="block text-sm font-medium text-gray-700 mb-1">
-                WhatsApp
-              </label>
-              <input
-                id="phone"
-                name="phone"
-                type="tel"
-                required
-                placeholder="+34 600 000 000"
-                value={form.phone}
-                onChange={handleChange}
-                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
-              />
-            </div>
-          </div>
+          </fieldset>
 
-          {/* Notas opcionales */}
-          <div className="mb-6">
-            <label htmlFor="notes" className="block text-sm font-medium text-gray-700 mb-1">
+          {/* Notas */}
+          <div className="mb-10">
+            <label htmlFor="notes" className={labelClass}>
               Notas (opcional)
             </label>
             <textarea
               id="notes"
               name="notes"
-              rows={3}
+              rows={2}
               placeholder="Alergias, instrucciones especiales..."
-              value={form.notes}
-              onChange={handleChange}
-              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 resize-none"
+              value={fields.notes}
+              onChange={handleFieldChange}
+              className={clsx(inputClass, "resize-none")}
             />
           </div>
 
-          {/* Resumen de precios */}
-          {selectedProduct && (
-            <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 mb-6 text-sm">
-              <div className="flex justify-between text-gray-600 mb-1">
-                <span>Precio total ({form.quantity} × {selectedProduct.finalPrice} €)</span>
-                <span>{selectedProduct.finalPrice * Number(form.quantity)} €</span>
+          {/* Resumen del pedido */}
+          {cartProducts.length > 0 && (
+            <div className="border-t border-b border-negro/10 py-6 mb-8">
+              <p className="text-[10px] font-medium tracking-[0.2em] uppercase text-negro/30 mb-5">
+                Resumen del pedido
+              </p>
+              <div className="space-y-2 mb-4">
+                {cartProducts.map((p) => (
+                  <div key={p.id} className="flex justify-between text-sm text-negro/60">
+                    <span>
+                      {p.name}{" "}
+                      <span className="text-negro/38">×{cart[p.id]}</span>
+                    </span>
+                    <span>{p.finalPrice * (cart[p.id] ?? 0)} €</span>
+                  </div>
+                ))}
               </div>
-              <div className="flex justify-between text-gray-600 mb-1">
-                <span>Abono ahora</span>
-                <span className="font-semibold text-gray-900">— {depositPreview} €</span>
-              </div>
-              <div className="flex justify-between border-t border-gray-200 pt-2 mt-2 font-medium text-gray-900">
-                <span>Pendiente al recoger</span>
-                <span>{pendingPreview} €</span>
+              <div className="space-y-2 border-t border-negro/10 pt-4 text-sm">
+                <div className="flex justify-between text-negro/55">
+                  <span>Total del pedido</span>
+                  <span>{totalFinal} €</span>
+                </div>
+                <div className="flex justify-between text-negro/55">
+                  <span>Abono ahora ({totalItems} × 1 €)</span>
+                  <span className="font-semibold text-tierra">— {totalDeposit} €</span>
+                </div>
+                <div className="flex justify-between pt-2 border-t border-negro/10 font-semibold text-verde-bosque">
+                  <span>Pendiente al recoger</span>
+                  <span>{totalPending} €</span>
+                </div>
               </div>
             </div>
           )}
 
           {error && (
-            <p className="text-red-600 text-sm mb-4 bg-red-50 border border-red-200 rounded-md px-3 py-2">
-              {error}
-            </p>
+            <div className="border-l-2 border-tierra/35 pl-4 py-1 mb-6">
+              <p className="text-tierra text-sm">{error}</p>
+            </div>
           )}
 
           <button
             type="submit"
             disabled={loading}
             className={clsx(
-              "w-full bg-gray-900 text-white font-medium py-3 px-6 rounded-md text-sm transition-colors",
-              loading ? "opacity-60 cursor-not-allowed" : "hover:bg-gray-700"
+              "w-full bg-verde-bosque text-crema text-[11px] font-semibold tracking-[0.2em] uppercase py-5 px-6 transition-all duration-300 flex items-center justify-center gap-3",
+              loading
+                ? "opacity-60 cursor-not-allowed"
+                : "hover:bg-verde-platano"
             )}
           >
-            {loading ? "Redirigiendo a pago..." : "Reservar y pagar 1 €"}
+            {loading && (
+              <span className="w-4 h-4 border border-crema/30 border-t-crema rounded-full animate-spin shrink-0" />
+            )}
+            {loading
+              ? "Procesando..."
+              : `Reservar y pagar ${totalDeposit > 0 ? totalDeposit : 1} €`}
           </button>
 
-          <p className="text-xs text-gray-500 mt-3 text-center">
-            Pago seguro con Stripe. No guardamos datos de tu tarjeta.
+          <p className="text-[10px] font-medium text-negro/25 uppercase tracking-wider mt-4 text-center">
+            Pago seguro con Stripe · No guardamos datos de tu tarjeta
           </p>
         </form>
       </div>
