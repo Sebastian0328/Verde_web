@@ -84,6 +84,34 @@ function formatDateLabel(dateStr: string): string {
 
 const DAY_LABELS = ["L", "M", "X", "J", "V", "S", "D"];
 
+// ─── Category helpers ───────────────────────────────────────────────────────
+
+type NormalizedCategory = "Verde" | "Maduro" | "Otros";
+
+function normalizeCategory(raw: string): NormalizedCategory {
+  const lower = (raw ?? "").trim().toLowerCase();
+  if (lower === "verde") return "Verde";
+  if (lower === "maduro") return "Maduro";
+  return "Otros";
+}
+
+const CATEGORY_ORDER: NormalizedCategory[] = ["Verde", "Maduro", "Otros"];
+
+const CATEGORY_CONFIG: Record<NormalizedCategory, { title: string; subtitle: string }> = {
+  Verde: {
+    title: "VERDE Y SOLO VERDE",
+    subtitle: "Nuestros clásicos de verde, hechos bajo pedido.",
+  },
+  Maduro: {
+    title: "PARA LOS AMANTES DEL MADURO",
+    subtitle: "Una versión más dulce, intensa y contundente.",
+  },
+  Otros: {
+    title: "OTROS PRODUCTOS",
+    subtitle: "Más opciones disponibles por reserva.",
+  },
+};
+
 // ─── StepSection ───────────────────────────────────────────────────────────
 // Renders a step row: collapsed summary when not active, full content when active.
 
@@ -524,19 +552,47 @@ export default function ReservationForm({
             summary={cartProducts.map((p) => `${p.name} ×${cart[p.id]}`).join(" · ")}
             onEdit={() => goToStep(1)}
           >
-            <div className="grid gap-4 sm:grid-cols-2">
-              {products.map((product) => (
-                <ProductCard
-                  key={product.id}
-                  product={product}
-                  quantity={cart[product.id] ?? 0}
-                  maxQuantity={config.maxQuantityPerOrder}
-                  onAdd={addToCart}
-                  onIncrement={increment}
-                  onDecrement={decrement}
-                />
-              ))}
-            </div>
+            {(() => {
+              const grouped: Partial<Record<NormalizedCategory, typeof products>> = {};
+              for (const p of products) {
+                const cat = normalizeCategory(p.category ?? "");
+                (grouped[cat] ??= []).push(p);
+              }
+              const activeGroups = CATEGORY_ORDER.filter((c) => (grouped[c]?.length ?? 0) > 0);
+              const showHeadings = activeGroups.length > 1 || activeGroups[0] !== "Otros";
+
+              return (
+                <div className="space-y-8">
+                  {activeGroups.map((cat) => (
+                    <div key={cat}>
+                      {showHeadings && (
+                        <div className="mb-4">
+                          <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-verde-bosque/70 mb-1">
+                            {CATEGORY_CONFIG[cat].title}
+                          </p>
+                          <p className="text-xs text-negro/45 leading-relaxed">
+                            {CATEGORY_CONFIG[cat].subtitle}
+                          </p>
+                        </div>
+                      )}
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        {grouped[cat]!.map((product) => (
+                          <ProductCard
+                            key={product.id}
+                            product={product}
+                            quantity={cart[product.id] ?? 0}
+                            maxQuantity={config.maxQuantityPerOrder}
+                            onAdd={addToCart}
+                            onIncrement={increment}
+                            onDecrement={decrement}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
 
             {cartProducts.length > 0 && (
               <>

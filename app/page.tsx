@@ -28,6 +28,7 @@ export default async function HomePage() {
         available: p.available,
         allergens: p.allergens,
         image: p.imageUrl || undefined,
+        category: p.category || undefined,
       }));
     }
     reservationsOpen = settings.reservationsOpen;

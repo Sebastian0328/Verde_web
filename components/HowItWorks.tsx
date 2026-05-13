@@ -2,20 +2,20 @@ export default function HowItWorks() {
   const steps = [
     {
       number: "01",
-      title: "Elige tu bolón",
-      description: "Selecciona el producto, la cantidad y el día de entrega.",
+      title: "Elige tu producto",
+      description: "Selecciona el que mas te guste, la cantidad y el día de entrega.",
     },
     {
       number: "02",
       title: "Paga 1 € de reserva",
       description:
-        "Confirmamos tu pedido con un abono de 1 €. El resto lo pagas cuando recoges.",
+        "Confirmamos tu pedido con un abono de 1 €. El resto lo pagas cuando recibes tu pedido.",
     },
     {
       number: "03",
-      title: "Recibe el fin de semana",
+      title: "Recibe el dia que tu elijas",
       description:
-        "Te avisamos por WhatsApp para coordinar la entrega. Sin colas, sin sorpresas.",
+        "Te avisamos por WhatsApp y correo electrónico para coordinar la entrega. No te preocupes, no hay colas, no hay sorpresas.",
     },
   ];
 

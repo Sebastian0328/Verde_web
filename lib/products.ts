@@ -7,6 +7,7 @@ export interface Product {
   available: boolean;
   allergens?: string[];
   image?: string;           // ruta a /public o URL externa
+  category?: string;
 }
 
 export const PRODUCTS: Product[] = [
