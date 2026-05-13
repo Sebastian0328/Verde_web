@@ -1,3 +1,4 @@
+import Image from "next/image";
 import { stripe } from "@/lib/stripe";
 
 interface GraciasPageProps {
@@ -43,23 +44,29 @@ export default async function GraciasPage({ searchParams }: GraciasPageProps) {
   return (
     <section className="min-h-screen bg-verde-bosque flex items-center justify-center px-6 py-16">
       <div className="max-w-lg mx-auto w-full">
-        <div className="mb-14">
-          <div className="flex justify-start mb-8" aria-hidden="true">
-            <svg width="22" height="22" viewBox="0 0 100 100" fill="none">
-              <path d="M22 74 C16 58 19 28 42 14 C62 2 79 12 84 30 C87 44 79 60 64 68 C49 76 28 84 22 74Z" fill="#FFBC23"/>
-            </svg>
-          </div>
 
+        {/* Logo */}
+        <div className="flex justify-start mb-10">
+          <Image
+            src="/iconVerde.png"
+            alt="Verde"
+            width={72}
+            height={72}
+          />
+        </div>
+
+        <div className="mb-14">
           <p className="text-crema/30 text-[10px] font-medium tracking-[0.4em] uppercase mb-4">
             Pedido confirmado
           </p>
           <h1 className="text-crema text-4xl sm:text-5xl font-bold tracking-tight leading-tight mb-6">
             Reserva confirmada
           </h1>
-          <p className="text-crema/55 text-base leading-relaxed">
-            Gracias{customerName ? `, ${customerName}` : ""}. Tu pedido está
-            confirmado y pronto te escribiremos por WhatsApp para coordinar la
-            entrega.
+          <p className="text-crema/60 text-base leading-relaxed mb-3">
+            Gracias{customerName ? `, ${customerName}` : ""}. Te enviamos un correo con los detalles de tu pedido.
+          </p>
+          <p className="text-crema/60 text-base leading-relaxed">
+            Si necesitamos confirmar algo sobre la entrega, te escribiremos por WhatsApp.
           </p>
         </div>
 
@@ -69,7 +76,6 @@ export default async function GraciasPage({ searchParams }: GraciasPageProps) {
               Tu pedido
             </p>
 
-            {/* Lista de productos */}
             {items.length > 0 && (
               <div className="space-y-3 mb-6">
                 {items.map((item) => (
@@ -114,10 +120,6 @@ export default async function GraciasPage({ searchParams }: GraciasPageProps) {
             </div>
           </div>
         )}
-
-        <p className="text-[10px] font-medium text-crema/22 uppercase tracking-wider mb-10">
-          También recibirás un correo de confirmación
-        </p>
 
         <a
           href="/"

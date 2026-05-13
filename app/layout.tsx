@@ -30,19 +30,27 @@ export default function RootLayout({
       <body
         className={`${arimo.variable} font-sans bg-crema text-negro antialiased`}
       >
-        <header className="border-b border-negro/8 px-6 py-4 bg-crema/95 backdrop-blur-sm sticky top-0 z-50">
+        <header className="border-b border-negro/8 px-6 py-2.5 bg-crema/90 backdrop-blur-md fixed inset-x-0 top-0 z-50">
           <div className="max-w-5xl mx-auto flex items-center justify-between">
             <a href="/" className="opacity-90 hover:opacity-100 transition-opacity duration-200">
               <Image
                 src="/Verdeart.png"
                 alt="Verde"
-                width={80}
-                height={80}
+                width={52}
+                height={52}
               />
             </a>
-            <span className="text-[10px] font-medium text-negro/35 uppercase tracking-[0.3em] hidden sm:block">
-              Madrid · Dark Kitchen
-            </span>
+            <div className="flex items-center gap-6">
+              <span className="text-[10px] font-medium text-negro/35 uppercase tracking-[0.3em] hidden sm:block">
+                Madrid · Dark Kitchen
+              </span>
+              <a
+                href="/#reservar"
+                className="bg-verde-bosque text-crema text-[10px] font-semibold tracking-[0.2em] uppercase px-5 py-2.5 hover:bg-verde-platano transition-colors duration-200"
+              >
+                Reservar
+              </a>
+            </div>
           </div>
         </header>
 

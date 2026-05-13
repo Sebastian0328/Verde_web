@@ -28,22 +28,9 @@ export default function ProductCard({
         !product.available && "opacity-40"
       )}
     >
-      {/* Imagen o placeholder */}
-      {product.image ? (
-        <img
-          src={product.image}
-          alt={product.name}
-          className="w-full h-36 object-cover mb-4"
-        />
-      ) : (
-        <div className="w-full h-36 bg-negro/4 mb-4 flex items-center justify-center">
-          <svg width="22" height="22" viewBox="0 0 100 100" fill="none" aria-hidden="true">
-            <path d="M22 74 C16 58 19 28 42 14 C62 2 79 12 84 30 C87 44 79 60 64 68 C49 76 28 84 22 74Z" fill="#FFBC23" opacity="0.35"/>
-          </svg>
-        </div>
-      )}
+      {/* Future: render product image when imageUrl is available */}
 
-      {/* Info del producto */}
+      {/* Product info */}
       <div className="flex items-start justify-between gap-3 mb-4 flex-1">
         <div className="min-w-0">
           <h3 className="text-base font-semibold text-verde-bosque leading-tight mb-1">
@@ -68,7 +55,7 @@ export default function ProductCard({
         </div>
       </div>
 
-      {/* Controles */}
+      {/* Controls */}
       {product.available && (
         <div className="mt-auto">
           {inCart ? (

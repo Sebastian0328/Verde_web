@@ -1,31 +1,42 @@
 import { NextResponse } from "next/server";
-import { Resend } from "resend";
+import { sendConfirmationToCustomer } from "@/lib/email";
 
+// GET /api/test-email
+// Sends a CustomerReservationEmail with fake data to VERDE_INTERNAL_EMAIL.
+// Only for development / staging. Remove or protect in production.
 export async function GET() {
-  const apiKey = process.env.RESEND_API_KEY;
-  const from = process.env.VERDE_FROM_EMAIL;
   const to = process.env.VERDE_INTERNAL_EMAIL;
 
-  if (!apiKey || !from || !to) {
+  if (!to) {
     return NextResponse.json(
-      {
-        success: false,
-        error: "Faltan variables de entorno: RESEND_API_KEY, VERDE_FROM_EMAIL o VERDE_INTERNAL_EMAIL",
-      },
+      { success: false, error: "Falta VERDE_INTERNAL_EMAIL en variables de entorno" },
       { status: 500 }
     );
   }
 
   try {
-    const resend = new Resend(apiKey);
-    const data = await resend.emails.send({
-      from,
-      to,
-      subject: "Prueba Resend — Verde",
-      html: "<p>Resend está funcionando correctamente para Verde.</p>",
+    await sendConfirmationToCustomer({
+      // Redirect to internal email so no real customer gets a test email
+      email:           to,
+      customerName:    "Sara Rodríguez",
+      phone:           "+34 600 000 000",
+      items: [
+        { productName: "Bolón clásico", quantity: 2, finalPrice: 8 },
+        { productName: "Combo Verde",   quantity: 1, finalPrice: 14 },
+      ],
+      reservationDate: "sábado 17 de mayo de 2025",
+      reservationTime: "10:00",
+      depositPaid:     3,
+      pendingAmount:   27,
+      deliveryMethod:  "delivery",
+      deliveryAddress: "Calle Gran Vía 12, 3º A",
+      deliveryDetails: "Timbre apellido Rodríguez",
+      postalCode:      "28013",
+      deliveryZone:    "Centro",
+      notes:           "Sin cebolla por favor.",
     });
 
-    return NextResponse.json({ success: true, data });
+    return NextResponse.json({ success: true, sentTo: to });
   } catch (error) {
     return NextResponse.json(
       { success: false, error: error instanceof Error ? error.message : String(error) },

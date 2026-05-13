@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import type { Product } from "@/lib/products";
 import type { StoreConfig } from "@/lib/store-config";
 import ProductCard from "./ProductCard";
@@ -72,15 +72,134 @@ function formatMonthTitle(monthKey: string): string {
   );
 }
 
+function formatDateLabel(dateStr: string): string {
+  if (!dateStr) return "";
+  const d = new Date(dateStr + "T00:00:00");
+  return d.toLocaleDateString("es-ES", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  });
+}
+
 const DAY_LABELS = ["L", "M", "X", "J", "V", "S", "D"];
 
-export default function ReservationForm({ products, config }: ReservationFormProps) {
+// ─── StepSection ───────────────────────────────────────────────────────────
+// Renders a step row: collapsed summary when not active, full content when active.
+
+interface StepSectionProps {
+  stepRef: React.RefObject<HTMLDivElement>;
+  number: number;
+  title: string;
+  isActive: boolean;
+  isDone: boolean;
+  summary: string;
+  onEdit: () => void;
+  showEditButton?: boolean;
+  children: React.ReactNode;
+}
+
+function StepSection({
+  stepRef,
+  number,
+  title,
+  isActive,
+  isDone,
+  summary,
+  onEdit,
+  showEditButton = true,
+  children,
+}: StepSectionProps) {
+  return (
+    <div ref={stepRef} className="border-b border-negro/8 scroll-mt-24">
+      {/* Header row */}
+      <div className="flex items-center justify-between py-5">
+        <div className="flex items-center gap-3 min-w-0">
+          <span
+            className={clsx(
+              "w-6 h-6 shrink-0 flex items-center justify-center text-[10px] font-bold transition-all duration-200",
+              isDone
+                ? "bg-verde-bosque text-crema"
+                : isActive
+                  ? "border border-verde-bosque text-verde-bosque"
+                  : "border border-negro/20 text-negro/30"
+            )}
+          >
+            {isDone ? "✓" : number}
+          </span>
+
+          <span
+            className={clsx(
+              "text-[11px] font-semibold uppercase tracking-[0.2em] shrink-0",
+              isActive
+                ? "text-verde-bosque"
+                : isDone
+                  ? "text-negro/55"
+                  : "text-negro/35"
+            )}
+          >
+            {title}
+          </span>
+
+          {/* Inline summary — hidden on very small screens */}
+          {!isActive && summary && (
+            <span className="text-xs text-negro/40 truncate hidden sm:inline ml-1">
+              — {summary}
+            </span>
+          )}
+        </div>
+
+        {!isActive && showEditButton && (
+          <button
+            type="button"
+            onClick={onEdit}
+            className="ml-4 shrink-0 text-[10px] font-semibold uppercase tracking-[0.15em] text-verde-bosque/60 hover:text-verde-bosque transition-colors duration-150 border-b border-verde-bosque/20 hover:border-verde-bosque pb-px"
+          >
+            Cambiar
+          </button>
+        )}
+      </div>
+
+      {/* Mobile summary line */}
+      {!isActive && summary && (
+        <p className="sm:hidden text-xs text-negro/40 pb-4 -mt-2 pl-9 leading-snug">
+          {summary}
+        </p>
+      )}
+
+      {/* Expandable content */}
+      {isActive && (
+        <div className="pb-8 animate-step-in">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── ReservationForm ────────────────────────────────────────────────────────
+
+export default function ReservationForm({
+  products,
+  config,
+}: ReservationFormProps) {
+  const [currentStep, setCurrentStep] = useState(1);
+  const [maxStep, setMaxStep] = useState(1);
   const [cart, setCart] = useState<Record<string, number>>({});
   const [fields, setFields] = useState<FormFields>(INITIAL_FIELDS);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [availability, setAvailability] = useState<DayAvailability[]>([]);
   const [loadingAvailability, setLoadingAvailability] = useState(true);
+
+  // Individual refs — hooks cannot be in arrays
+  const ref1 = useRef<HTMLDivElement>(null);
+  const ref2 = useRef<HTMLDivElement>(null);
+  const ref3 = useRef<HTMLDivElement>(null);
+  const ref4 = useRef<HTMLDivElement>(null);
+  const ref5 = useRef<HTMLDivElement>(null);
+  const ref6 = useRef<HTMLDivElement>(null);
+  const stepRefs = [ref1, ref2, ref3, ref4, ref5, ref6];
 
   useEffect(() => {
     fetch("/api/availability")
@@ -90,6 +209,20 @@ export default function ReservationForm({ products, config }: ReservationFormPro
       .finally(() => setLoadingAvailability(false));
   }, []);
 
+  function goToStep(step: number) {
+    setCurrentStep(step);
+    setMaxStep((prev) => Math.max(prev, step));
+    setTimeout(() => {
+      stepRefs[step - 1]?.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    }, 60);
+  }
+
+  // ── Cart ──
+
+  // Future: support multi-product cart
   function addToCart(productId: string) {
     setCart((prev) => ({ ...prev, [productId]: 1 }));
     setError(null);
@@ -114,6 +247,8 @@ export default function ReservationForm({ products, config }: ReservationFormPro
     });
   }
 
+  // ── Fields ──
+
   function handleFieldChange(
     e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
   ) {
@@ -122,6 +257,7 @@ export default function ReservationForm({ products, config }: ReservationFormPro
   }
 
   function selectDate(date: string) {
+    // Clearing time — slots are specific to each date
     setFields((prev) => ({ ...prev, reservationDate: date, reservationTime: "" }));
     setError(null);
   }
@@ -130,6 +266,8 @@ export default function ReservationForm({ products, config }: ReservationFormPro
     setFields((prev) => ({ ...prev, reservationTime: time }));
     setError(null);
   }
+
+  // ── Derived values (unchanged from original) ──
 
   const selectedDay = availability.find((d) => d.date === fields.reservationDate);
 
@@ -145,7 +283,6 @@ export default function ReservationForm({ products, config }: ReservationFormPro
   );
   const totalPending = totalFinal - totalDeposit;
 
-  // Build month groups for calendar (skip past/today)
   const monthMap: Record<string, DayAvailability[]> = {};
   for (const day of availability) {
     if (day.status === "past_or_today") continue;
@@ -155,25 +292,54 @@ export default function ReservationForm({ products, config }: ReservationFormPro
   }
   const monthKeys = Object.keys(monthMap).sort();
 
+  // Step completion flags
+  const step1Done = cartProducts.length > 0;
+  const step2Done = !!fields.reservationDate;
+  const step3Done = !!fields.reservationTime;
+  const step4Done = !!(
+    fields.customerName.trim() &&
+    fields.email.trim() &&
+    fields.phone.trim()
+  );
+  const step5Done =
+    fields.deliveryMethod === "pickup" ||
+    !!(fields.deliveryAddress.trim().length >= 5 && fields.postalCode.trim());
+
+  // ── Submit (logic unchanged — same payload to /api/create-checkout-session) ──
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
 
     if (cartProducts.length === 0) {
-      setError("Añade al menos un producto a tu pedido.");
+      setError("Elige un producto para continuar.");
+      goToStep(1);
       return;
     }
-    if (!fields.reservationDate || !fields.reservationTime) {
-      setError("Selecciona una fecha y una hora para continuar.");
+    if (!fields.reservationDate) {
+      setError("Elige el día de tu reserva.");
+      goToStep(2);
+      return;
+    }
+    if (!fields.reservationTime) {
+      setError("Elige una hora disponible.");
+      goToStep(3);
+      return;
+    }
+    if (!fields.customerName.trim() || !fields.email.trim() || !fields.phone.trim()) {
+      setError("Completa tus datos para continuar.");
+      goToStep(4);
       return;
     }
     if (fields.deliveryMethod === "delivery") {
       if (!fields.deliveryAddress || fields.deliveryAddress.trim().length < 5) {
-        setError("Introduce una dirección de entrega válida.");
+        setError("Agrega la dirección de entrega.");
+        goToStep(5);
         return;
       }
       if (!fields.postalCode.trim()) {
         setError("El código postal es obligatorio.");
+        goToStep(5);
         return;
       }
     }
@@ -204,9 +370,11 @@ export default function ReservationForm({ products, config }: ReservationFormPro
       if (!res.ok) {
         if (res.status === 409) {
           setError("Ese horario acaba de agotarse. Elige otro horario disponible.");
+          setFields((prev) => ({ ...prev, reservationTime: "" }));
           fetch("/api/availability")
             .then((r) => r.json())
             .then((d) => setAvailability(Array.isArray(d) ? d : []));
+          goToStep(3);
         } else {
           setError(data.error ?? "Error al crear la reserva. Inténtalo de nuevo.");
         }
@@ -221,9 +389,115 @@ export default function ReservationForm({ products, config }: ReservationFormPro
     }
   }
 
+  // ── Calendar (extracted to avoid repetition) ──
+
+  function renderCalendar() {
+    if (loadingAvailability) {
+      return (
+        <div className="flex items-center gap-2 text-negro/30 text-sm py-4">
+          <span className="w-4 h-4 border border-negro/20 border-t-negro/50 rounded-full animate-spin" />
+          Cargando disponibilidad...
+        </div>
+      );
+    }
+    if (monthKeys.length === 0) {
+      return (
+        <p className="text-negro/40 text-sm py-4">
+          No hay fechas disponibles en este momento.
+        </p>
+      );
+    }
+    return (
+      <div className="max-w-sm">
+        {monthKeys.map((mk) => {
+          const daysInGroup = monthMap[mk];
+          const dateMap: Record<string, DayAvailability> = {};
+          for (const d of daysInGroup) dateMap[d.date] = d;
+
+          const [y, m] = mk.split("-").map(Number);
+          const daysInMonth = new Date(y, m, 0).getDate();
+          const firstDow = dayOfWeek(`${mk}-01`);
+
+          return (
+            <div key={mk} className="mb-5">
+              <p className="text-[10px] font-medium uppercase tracking-[0.25em] text-negro/40 mb-2 capitalize">
+                {formatMonthTitle(mk)}
+              </p>
+              <div className="grid grid-cols-7 gap-0.5 mb-0.5">
+                {DAY_LABELS.map((d) => (
+                  <div
+                    key={d}
+                    className="text-center text-[9px] font-medium text-negro/25 uppercase tracking-wider py-1"
+                  >
+                    {d}
+                  </div>
+                ))}
+              </div>
+              <div className="grid grid-cols-7 gap-0.5">
+                {Array.from({ length: firstDow }).map((_, i) => (
+                  <div key={`pad-${i}`} className="h-9" />
+                ))}
+                {Array.from({ length: daysInMonth }, (_, i) => {
+                  const dayNum = i + 1;
+                  const dateStr = `${mk}-${String(dayNum).padStart(2, "0")}`;
+                  const dayData = dateMap[dateStr];
+                  const isSelected = fields.reservationDate === dateStr;
+
+                  if (!dayData) {
+                    return (
+                      <div
+                        key={dateStr}
+                        className="h-9 flex items-center justify-center opacity-15"
+                      >
+                        <span className="text-xs text-negro">{dayNum}</span>
+                      </div>
+                    );
+                  }
+
+                  const isAvail = dayData.status === "available";
+                  const isSoldOut = dayData.status === "sold_out";
+
+                  return (
+                    <button
+                      key={dateStr}
+                      type="button"
+                      disabled={!isAvail}
+                      onClick={() => selectDate(dateStr)}
+                      className={clsx(
+                        "h-9 w-full flex flex-col items-center justify-center text-xs transition-all duration-150",
+                        isSelected && "bg-verde-bosque text-crema font-semibold",
+                        isAvail &&
+                          !isSelected &&
+                          "border border-verde-bosque/25 text-verde-bosque hover:bg-verde-bosque/10",
+                        isSoldOut && "opacity-35 cursor-not-allowed text-negro/50",
+                        dayData.status === "closed" &&
+                          "opacity-20 cursor-not-allowed text-negro/30"
+                      )}
+                    >
+                      <span>{dayNum}</span>
+                      {isSoldOut && (
+                        <span className="hidden sm:block text-[7px] leading-tight uppercase tracking-wide">
+                          sold
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  // ── Render ──
+
   return (
     <section className="py-20 px-6" id="reservar">
       <div className="max-w-2xl mx-auto">
+
+        {/* Header */}
         <div className="mb-14">
           <p className="text-negro/30 text-[10px] font-medium tracking-[0.4em] uppercase mb-3">
             Tu pedido
@@ -240,9 +514,16 @@ export default function ReservationForm({ products, config }: ReservationFormPro
 
         <form onSubmit={handleSubmit} noValidate>
 
-          {/* 01 — Productos */}
-          <fieldset className="mb-10">
-            <legend className={clsx(labelClass, "mb-5")}>01 — Productos</legend>
+          {/* ── PASO 1: PRODUCTO ── */}
+          <StepSection
+            stepRef={ref1}
+            number={1}
+            title="Elige tu producto"
+            isActive={currentStep === 1}
+            isDone={currentStep > 1}
+            summary={cartProducts.map((p) => `${p.name} ×${cart[p.id]}`).join(" · ")}
+            onEdit={() => goToStep(1)}
+          >
             <div className="grid gap-4 sm:grid-cols-2">
               {products.map((product) => (
                 <ProductCard
@@ -258,341 +539,376 @@ export default function ReservationForm({ products, config }: ReservationFormPro
             </div>
 
             {cartProducts.length > 0 && (
-              <div className="mt-5 flex items-center justify-between border-t border-verde-bosque/15 pt-4">
-                <p className="text-sm text-verde-bosque/70">
-                  <span className="font-semibold text-verde-bosque">{totalItems}</span>{" "}
-                  {totalItems === 1 ? "unidad" : "unidades"} ·{" "}
-                  {cartProducts.length}{" "}
-                  {cartProducts.length === 1 ? "producto" : "productos"}
-                </p>
-                <p className="text-sm font-semibold text-verde-bosque">
-                  Abono: {totalDeposit} €
-                </p>
-              </div>
-            )}
-          </fieldset>
-
-          {/* 02 — Fecha */}
-          <fieldset className="mb-10 pb-10 border-b border-negro/8">
-            <legend className={clsx(labelClass, "mb-6")}>
-              02 — Elige el día de tu reserva
-            </legend>
-
-            {loadingAvailability ? (
-              <div className="flex items-center gap-2 text-negro/30 text-sm py-4">
-                <span className="w-4 h-4 border border-negro/20 border-t-negro/50 rounded-full animate-spin" />
-                Cargando disponibilidad...
-              </div>
-            ) : monthKeys.length === 0 ? (
-              <p className="text-negro/40 text-sm py-4">
-                No hay fechas disponibles en este momento.
-              </p>
-            ) : (
-              monthKeys.map((mk) => {
-                const daysInGroup = monthMap[mk];
-                const dateMap: Record<string, DayAvailability> = {};
-                for (const d of daysInGroup) dateMap[d.date] = d;
-
-                const [y, m] = mk.split("-").map(Number);
-                const daysInMonth = new Date(y, m, 0).getDate();
-                const firstDow = dayOfWeek(`${mk}-01`);
-
-                return (
-                  <div key={mk} className="mb-8">
-                    <p className="text-[10px] font-medium uppercase tracking-[0.25em] text-negro/40 mb-4 capitalize">
-                      {formatMonthTitle(mk)}
-                    </p>
-
-                    <div className="grid grid-cols-7 gap-1 mb-1">
-                      {DAY_LABELS.map((d) => (
-                        <div
-                          key={d}
-                          className="text-center text-[9px] font-medium text-negro/25 uppercase tracking-wider py-1"
-                        >
-                          {d}
-                        </div>
-                      ))}
-                    </div>
-
-                    <div className="grid grid-cols-7 gap-1">
-                      {Array.from({ length: firstDow }).map((_, i) => (
-                        <div key={`pad-${i}`} />
-                      ))}
-
-                      {Array.from({ length: daysInMonth }, (_, i) => {
-                        const dayNum = i + 1;
-                        const dateStr = `${mk}-${String(dayNum).padStart(2, "0")}`;
-                        const dayData = dateMap[dateStr];
-                        const isSelected = fields.reservationDate === dateStr;
-
-                        if (!dayData) {
-                          return (
-                            <div
-                              key={dateStr}
-                              className="aspect-square flex items-center justify-center opacity-15"
-                            >
-                              <span className="text-xs text-negro">{dayNum}</span>
-                            </div>
-                          );
-                        }
-
-                        const isAvail = dayData.status === "available";
-                        const isSoldOut = dayData.status === "sold_out";
-
-                        return (
-                          <button
-                            key={dateStr}
-                            type="button"
-                            disabled={!isAvail}
-                            onClick={() => selectDate(dateStr)}
-                            className={clsx(
-                              "aspect-square flex flex-col items-center justify-center text-xs transition-all duration-150",
-                              isSelected && "bg-verde-bosque text-crema font-semibold",
-                              isAvail && !isSelected &&
-                                "border border-verde-bosque/25 text-verde-bosque hover:bg-verde-bosque/10",
-                              isSoldOut && "opacity-35 cursor-not-allowed text-negro/50",
-                              dayData.status === "closed" && "opacity-20 cursor-not-allowed text-negro/30"
-                            )}
-                          >
-                            <span>{dayNum}</span>
-                            {isSoldOut && (
-                              <span className="hidden sm:block text-[7px] leading-tight uppercase tracking-wide mt-0.5">
-                                Sold out
-                              </span>
-                            )}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </fieldset>
-
-          {/* 03 — Hora (solo si hay fecha seleccionada) */}
-          {fields.reservationDate && selectedDay && selectedDay.slots.length > 0 && (
-            <fieldset className="mb-10 pb-10 border-b border-negro/8">
-              <legend className={clsx(labelClass, "mb-5")}>
-                03 — Elige una hora disponible
-              </legend>
-              <div className="flex flex-wrap gap-2">
-                {selectedDay.slots.map((slot) => {
-                  const isSelected = fields.reservationTime === slot.time;
-                  const isSoldOut = slot.status === "sold_out";
-                  return (
-                    <button
-                      key={slot.time}
-                      type="button"
-                      disabled={isSoldOut}
-                      onClick={() => selectTime(slot.time)}
-                      className={clsx(
-                        "px-4 py-2 text-sm font-medium border transition-all duration-150",
-                        isSelected && "bg-verde-bosque text-crema border-verde-bosque",
-                        !isSelected && !isSoldOut &&
-                          "border-verde-bosque/30 text-verde-bosque hover:bg-verde-bosque/10",
-                        isSoldOut && "border-negro/10 text-negro/25 cursor-not-allowed opacity-40"
-                      )}
-                    >
-                      {slot.time}
-                      {isSoldOut && (
-                        <span className="ml-1.5 text-[9px] uppercase tracking-wide">
-                          · Sold out
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            </fieldset>
-          )}
-
-          {/* Tus datos */}
-          <fieldset className="mb-10 pb-10 border-b border-negro/8">
-            <legend className={clsx(labelClass, "mb-5")}>
-              {fields.reservationDate ? "04" : "03"} — Tus datos
-            </legend>
-            <div className="grid gap-8 sm:grid-cols-2">
-              <div>
-                <label htmlFor="customerName" className={labelClass}>
-                  Nombre completo
-                </label>
-                <input
-                  id="customerName"
-                  name="customerName"
-                  type="text"
-                  required
-                  placeholder="Tu nombre"
-                  value={fields.customerName}
-                  onChange={handleFieldChange}
-                  className={inputClass}
-                />
-              </div>
-              <div>
-                <label htmlFor="email" className={labelClass}>
-                  Email
-                </label>
-                <input
-                  id="email"
-                  name="email"
-                  type="email"
-                  required
-                  placeholder="tu@email.com"
-                  value={fields.email}
-                  onChange={handleFieldChange}
-                  className={inputClass}
-                />
-              </div>
-              <div>
-                <label htmlFor="phone" className={labelClass}>
-                  WhatsApp
-                </label>
-                <input
-                  id="phone"
-                  name="phone"
-                  type="tel"
-                  required
-                  placeholder="+34 600 000 000"
-                  value={fields.phone}
-                  onChange={handleFieldChange}
-                  className={inputClass}
-                />
-              </div>
-            </div>
-          </fieldset>
-
-          {/* Entrega */}
-          <fieldset className="mb-10 pb-10 border-b border-negro/8">
-            <legend className={clsx(labelClass, "mb-5")}>
-              {fields.reservationDate ? "05" : "04"} — Entrega
-            </legend>
-
-            {/* Método */}
-            <div className="mb-6">
-              <p className={clsx(labelClass, "mb-3")}>Método de entrega</p>
-              <div className="flex border border-negro/15 w-fit">
-                <button
-                  type="button"
-                  onClick={() => setFields((p) => ({ ...p, deliveryMethod: "delivery" }))}
-                  className={clsx(
-                    "px-5 py-2.5 text-xs font-semibold tracking-[0.15em] uppercase transition-colors duration-150",
-                    fields.deliveryMethod === "delivery"
-                      ? "bg-verde-bosque text-crema"
-                      : "text-negro/45 hover:text-negro/70"
-                  )}
-                >
-                  Entrega a domicilio
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setFields((p) => ({ ...p, deliveryMethod: "pickup" }))}
-                  className={clsx(
-                    "px-5 py-2.5 text-xs font-semibold tracking-[0.15em] uppercase border-l border-negro/15 transition-colors duration-150",
-                    fields.deliveryMethod === "pickup"
-                      ? "bg-verde-bosque text-crema"
-                      : "text-negro/45 hover:text-negro/70"
-                  )}
-                >
-                  Recogida
-                </button>
-              </div>
-            </div>
-
-            {fields.deliveryMethod === "delivery" && (
               <>
-                <p className="text-negro/35 text-xs leading-relaxed mb-6 max-w-sm">
-                  Por ahora entregamos solo en zonas habilitadas. Si tu dirección está fuera de cobertura, te contactaremos por WhatsApp.
-                </p>
-
-                <div className="grid gap-8 sm:grid-cols-2">
-                  <div className="sm:col-span-2">
-                    <label htmlFor="deliveryAddress" className={labelClass}>
-                      Dirección de entrega
-                    </label>
-                    <input
-                      id="deliveryAddress"
-                      name="deliveryAddress"
-                      type="text"
-                      required
-                      placeholder="Calle, número, piso, puerta"
-                      value={fields.deliveryAddress}
-                      onChange={handleFieldChange}
-                      className={inputClass}
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="postalCode" className={labelClass}>
-                      Código postal
-                    </label>
-                    <input
-                      id="postalCode"
-                      name="postalCode"
-                      type="text"
-                      required
-                      placeholder="28000"
-                      value={fields.postalCode}
-                      onChange={handleFieldChange}
-                      className={inputClass}
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="deliveryZone" className={labelClass}>
-                      Zona (opcional)
-                    </label>
-                    <input
-                      id="deliveryZone"
-                      name="deliveryZone"
-                      type="text"
-                      placeholder="Barrio o distrito"
-                      value={fields.deliveryZone}
-                      onChange={handleFieldChange}
-                      className={inputClass}
-                    />
-                  </div>
-                  <div className="sm:col-span-2">
-                    <label htmlFor="deliveryDetails" className={labelClass}>
-                      Detalles de entrega (opcional)
-                    </label>
-                    <input
-                      id="deliveryDetails"
-                      name="deliveryDetails"
-                      type="text"
-                      placeholder="Timbre, referencia, indicaciones para el repartidor"
-                      value={fields.deliveryDetails}
-                      onChange={handleFieldChange}
-                      className={inputClass}
-                    />
-                  </div>
+                <div className="mt-5 flex items-center justify-between border-t border-verde-bosque/15 pt-4">
+                  <p className="text-sm text-verde-bosque/70">
+                    <span className="font-semibold text-verde-bosque">{totalItems}</span>{" "}
+                    {totalItems === 1 ? "unidad" : "unidades"} ·{" "}
+                    {cartProducts.length}{" "}
+                    {cartProducts.length === 1 ? "producto" : "productos"}
+                  </p>
+                  <p className="text-sm font-semibold text-verde-bosque">
+                    Abono: {totalDeposit} €
+                  </p>
                 </div>
+
+                <button
+                  type="button"
+                  onClick={() => goToStep(2)}
+                  className="mt-5 w-full bg-verde-bosque text-crema text-[11px] font-semibold tracking-[0.2em] uppercase py-4 px-6 hover:bg-verde-platano transition-all duration-300"
+                >
+                  Continuar con la fecha
+                </button>
               </>
             )}
-          </fieldset>
+          </StepSection>
 
-          {/* Notas */}
-          <div className="mb-10">
-            <label htmlFor="notes" className={labelClass}>
-              Notas (opcional)
-            </label>
-            <textarea
-              id="notes"
-              name="notes"
-              rows={2}
-              placeholder="Alergias, instrucciones especiales..."
-              value={fields.notes}
-              onChange={handleFieldChange}
-              className={clsx(inputClass, "resize-none")}
-            />
-          </div>
+          {/* ── PASO 2: FECHA ── */}
+          {maxStep >= 2 && (
+            <StepSection
+              stepRef={ref2}
+              number={2}
+              title="Elige el día"
+              isActive={currentStep === 2}
+              isDone={currentStep > 2}
+              summary={step2Done ? formatDateLabel(fields.reservationDate) : "Pendiente"}
+              onEdit={() => goToStep(2)}
+            >
+              {renderCalendar()}
 
-          {/* Resumen del pedido */}
-          {cartProducts.length > 0 && (
-            <div className="border-t border-b border-negro/10 py-6 mb-8">
-              <p className="text-[10px] font-medium tracking-[0.2em] uppercase text-negro/30 mb-5">
-                Resumen del pedido
-              </p>
-              <div className="space-y-2 mb-4">
+              <button
+                type="button"
+                disabled={!step2Done}
+                onClick={() => step2Done && goToStep(3)}
+                className={clsx(
+                  "mt-5 w-full text-[11px] font-semibold tracking-[0.2em] uppercase py-4 px-6 transition-all duration-300",
+                  step2Done
+                    ? "bg-verde-bosque text-crema hover:bg-verde-platano"
+                    : "bg-negro/8 text-negro/30 cursor-not-allowed"
+                )}
+              >
+                Continuar con la hora
+              </button>
+            </StepSection>
+          )}
+
+          {/* ── PASO 3: HORA ── */}
+          {maxStep >= 3 && (
+            <StepSection
+              stepRef={ref3}
+              number={3}
+              title="Elige la hora"
+              isActive={currentStep === 3}
+              isDone={currentStep > 3}
+              summary={step3Done ? fields.reservationTime : "Pendiente"}
+              onEdit={() => goToStep(3)}
+            >
+              {selectedDay && selectedDay.slots.length > 0 ? (
+                <div className="flex flex-wrap gap-2 mb-5">
+                  {selectedDay.slots.map((slot) => {
+                    const isSelected = fields.reservationTime === slot.time;
+                    const isSoldOut = slot.status === "sold_out";
+                    return (
+                      <button
+                        key={slot.time}
+                        type="button"
+                        disabled={isSoldOut}
+                        onClick={() => selectTime(slot.time)}
+                        className={clsx(
+                          "px-4 py-2 text-sm font-medium border transition-all duration-150",
+                          isSelected &&
+                            "bg-verde-bosque text-crema border-verde-bosque",
+                          !isSelected &&
+                            !isSoldOut &&
+                            "border-verde-bosque/30 text-verde-bosque hover:bg-verde-bosque/10",
+                          isSoldOut &&
+                            "border-negro/10 text-negro/25 cursor-not-allowed opacity-40"
+                        )}
+                      >
+                        {slot.time}
+                        {isSoldOut && (
+                          <span className="ml-1.5 text-[9px] uppercase tracking-wide">
+                            · Sold out
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="text-negro/40 text-sm py-2 mb-5">
+                  {fields.reservationDate
+                    ? "No hay horarios disponibles para esta fecha."
+                    : "Selecciona primero una fecha."}
+                </p>
+              )}
+
+              <button
+                type="button"
+                disabled={!step3Done}
+                onClick={() => step3Done && goToStep(4)}
+                className={clsx(
+                  "w-full text-[11px] font-semibold tracking-[0.2em] uppercase py-4 px-6 transition-all duration-300",
+                  step3Done
+                    ? "bg-verde-bosque text-crema hover:bg-verde-platano"
+                    : "bg-negro/8 text-negro/30 cursor-not-allowed"
+                )}
+              >
+                Continuar con tus datos
+              </button>
+            </StepSection>
+          )}
+
+          {/* ── PASO 4: DATOS PERSONALES ── */}
+          {maxStep >= 4 && (
+            <StepSection
+              stepRef={ref4}
+              number={4}
+              title="Tus datos"
+              isActive={currentStep === 4}
+              isDone={currentStep > 4}
+              summary={
+                step4Done
+                  ? `${fields.customerName} · ${fields.phone}`
+                  : "Pendiente"
+              }
+              onEdit={() => goToStep(4)}
+            >
+              <div className="grid gap-8 sm:grid-cols-2">
+                <div>
+                  <label htmlFor="customerName" className={labelClass}>
+                    Nombre completo
+                  </label>
+                  <input
+                    id="customerName"
+                    name="customerName"
+                    type="text"
+                    required
+                    placeholder="Tu nombre"
+                    value={fields.customerName}
+                    onChange={handleFieldChange}
+                    className={inputClass}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="email" className={labelClass}>
+                    Email
+                  </label>
+                  <input
+                    id="email"
+                    name="email"
+                    type="email"
+                    required
+                    placeholder="tu@email.com"
+                    value={fields.email}
+                    onChange={handleFieldChange}
+                    className={inputClass}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="phone" className={labelClass}>
+                    WhatsApp
+                  </label>
+                  <input
+                    id="phone"
+                    name="phone"
+                    type="tel"
+                    required
+                    placeholder="+34 600 000 000"
+                    value={fields.phone}
+                    onChange={handleFieldChange}
+                    className={inputClass}
+                  />
+                </div>
+                <div className="sm:col-span-2">
+                  <label htmlFor="notes" className={labelClass}>
+                    Notas (opcional)
+                  </label>
+                  <textarea
+                    id="notes"
+                    name="notes"
+                    rows={2}
+                    placeholder="Alergias, instrucciones especiales..."
+                    value={fields.notes}
+                    onChange={handleFieldChange}
+                    className={clsx(inputClass, "resize-none")}
+                  />
+                </div>
+              </div>
+
+              <button
+                type="button"
+                disabled={!step4Done}
+                onClick={() => step4Done && goToStep(5)}
+                className={clsx(
+                  "mt-6 w-full text-[11px] font-semibold tracking-[0.2em] uppercase py-4 px-6 transition-all duration-300",
+                  step4Done
+                    ? "bg-verde-bosque text-crema hover:bg-verde-platano"
+                    : "bg-negro/8 text-negro/30 cursor-not-allowed"
+                )}
+              >
+                Continuar con la entrega
+              </button>
+            </StepSection>
+          )}
+
+          {/* ── PASO 5: ENTREGA ── */}
+          {maxStep >= 5 && (
+            <StepSection
+              stepRef={ref5}
+              number={5}
+              title="Entrega"
+              isActive={currentStep === 5}
+              isDone={currentStep > 5}
+              summary={
+                step5Done
+                  ? fields.deliveryMethod === "pickup"
+                    ? "Recogida en local"
+                    : `${fields.deliveryAddress} · ${fields.postalCode}`
+                  : "Pendiente"
+              }
+              onEdit={() => goToStep(5)}
+            >
+              {/* Método */}
+              <div className="mb-6">
+                <p className={clsx(labelClass, "mb-3")}>Método de entrega</p>
+                <div className="flex border border-negro/15 w-fit">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setFields((p) => ({ ...p, deliveryMethod: "delivery" }))
+                    }
+                    className={clsx(
+                      "px-5 py-2.5 text-xs font-semibold tracking-[0.15em] uppercase transition-colors duration-150",
+                      fields.deliveryMethod === "delivery"
+                        ? "bg-verde-bosque text-crema"
+                        : "text-negro/45 hover:text-negro/70"
+                    )}
+                  >
+                    Entrega a domicilio
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setFields((p) => ({ ...p, deliveryMethod: "pickup" }))
+                    }
+                    className={clsx(
+                      "px-5 py-2.5 text-xs font-semibold tracking-[0.15em] uppercase border-l border-negro/15 transition-colors duration-150",
+                      fields.deliveryMethod === "pickup"
+                        ? "bg-verde-bosque text-crema"
+                        : "text-negro/45 hover:text-negro/70"
+                    )}
+                  >
+                    Recogida
+                  </button>
+                </div>
+              </div>
+
+              {fields.deliveryMethod === "delivery" && (
+                <>
+                  <p className="text-negro/35 text-xs leading-relaxed mb-6 max-w-sm">
+                    Por ahora entregamos solo en zonas habilitadas. Si tu
+                    dirección está fuera de cobertura, te contactaremos por
+                    WhatsApp.
+                  </p>
+                  <div className="grid gap-8 sm:grid-cols-2">
+                    <div className="sm:col-span-2">
+                      <label htmlFor="deliveryAddress" className={labelClass}>
+                        Dirección de entrega
+                      </label>
+                      <input
+                        id="deliveryAddress"
+                        name="deliveryAddress"
+                        type="text"
+                        required
+                        placeholder="Calle, número, piso, puerta"
+                        value={fields.deliveryAddress}
+                        onChange={handleFieldChange}
+                        className={inputClass}
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="postalCode" className={labelClass}>
+                        Código postal
+                      </label>
+                      <input
+                        id="postalCode"
+                        name="postalCode"
+                        type="text"
+                        required
+                        placeholder="28000"
+                        value={fields.postalCode}
+                        onChange={handleFieldChange}
+                        className={inputClass}
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="deliveryZone" className={labelClass}>
+                        Zona (opcional)
+                      </label>
+                      <input
+                        id="deliveryZone"
+                        name="deliveryZone"
+                        type="text"
+                        placeholder="Barrio o distrito"
+                        value={fields.deliveryZone}
+                        onChange={handleFieldChange}
+                        className={inputClass}
+                      />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <label htmlFor="deliveryDetails" className={labelClass}>
+                        Detalles de entrega (opcional)
+                      </label>
+                      <input
+                        id="deliveryDetails"
+                        name="deliveryDetails"
+                        type="text"
+                        placeholder="Timbre, referencia, indicaciones para el repartidor"
+                        value={fields.deliveryDetails}
+                        onChange={handleFieldChange}
+                        className={inputClass}
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
+
+              <button
+                type="button"
+                disabled={!step5Done}
+                onClick={() => step5Done && goToStep(6)}
+                className={clsx(
+                  "mt-6 w-full text-[11px] font-semibold tracking-[0.2em] uppercase py-4 px-6 transition-all duration-300",
+                  step5Done
+                    ? "bg-verde-bosque text-crema hover:bg-verde-platano"
+                    : "bg-negro/8 text-negro/30 cursor-not-allowed"
+                )}
+              >
+                Ver resumen y pagar
+              </button>
+            </StepSection>
+          )}
+
+          {/* ── PASO 6: RESUMEN Y PAGO ── */}
+          {maxStep >= 6 && (
+            <StepSection
+              stepRef={ref6}
+              number={6}
+              title="Resumen y pago"
+              isActive={currentStep >= 6}
+              isDone={false}
+              summary=""
+              onEdit={() => {}}
+              showEditButton={false}
+            >
+              {/* Products */}
+              <div className="space-y-2 mb-6">
                 {cartProducts.map((p) => (
-                  <div key={p.id} className="flex justify-between text-sm text-negro/60">
+                  <div
+                    key={p.id}
+                    className="flex justify-between text-sm text-negro/60"
+                  >
                     <span>
                       {p.name}{" "}
                       <span className="text-negro/38">×{cart[p.id]}</span>
@@ -601,60 +917,96 @@ export default function ReservationForm({ products, config }: ReservationFormPro
                   </div>
                 ))}
               </div>
-              {fields.reservationDate && fields.reservationTime && (
-                <div className="mb-3 space-y-1">
-                  <div className="flex justify-between text-sm text-negro/45">
-                    <span>Fecha</span>
-                    <span>{fields.reservationDate}</span>
-                  </div>
-                  <div className="flex justify-between text-sm text-negro/45">
-                    <span>Hora</span>
-                    <span>{fields.reservationTime}</span>
-                  </div>
+
+              {/* Date, time, personal, delivery */}
+              <div className="border-t border-negro/8 pt-4 space-y-2 mb-6">
+                <div className="flex justify-between text-sm text-negro/45">
+                  <span>Fecha</span>
+                  <span className="capitalize text-right">
+                    {formatDateLabel(fields.reservationDate)}
+                  </span>
                 </div>
-              )}
-              <div className="space-y-2 border-t border-negro/10 pt-4 text-sm">
+                <div className="flex justify-between text-sm text-negro/45">
+                  <span>Hora</span>
+                  <span>{fields.reservationTime}</span>
+                </div>
+                <div className="flex justify-between text-sm text-negro/45">
+                  <span>Nombre</span>
+                  <span>{fields.customerName}</span>
+                </div>
+                <div className="flex justify-between text-sm text-negro/45">
+                  <span>WhatsApp</span>
+                  <span>{fields.phone}</span>
+                </div>
+                {fields.deliveryMethod === "delivery" ? (
+                  <>
+                    <div className="flex justify-between text-sm text-negro/45">
+                      <span>Dirección</span>
+                      <span className="text-right max-w-[55%]">
+                        {fields.deliveryAddress}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-sm text-negro/45">
+                      <span>Código postal</span>
+                      <span>{fields.postalCode}</span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex justify-between text-sm text-negro/45">
+                    <span>Entrega</span>
+                    <span>Recogida en local</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Totals */}
+              <div className="space-y-2 border-t border-negro/10 pt-4 mb-8 text-sm">
                 <div className="flex justify-between text-negro/55">
                   <span>Total del pedido</span>
                   <span>{totalFinal} €</span>
                 </div>
                 <div className="flex justify-between text-negro/55">
                   <span>Abono ahora ({totalItems} × 1 €)</span>
-                  <span className="font-semibold text-tierra">— {totalDeposit} €</span>
+                  <span className="font-semibold text-tierra">
+                    — {totalDeposit} €
+                  </span>
                 </div>
                 <div className="flex justify-between pt-2 border-t border-negro/10 font-semibold text-verde-bosque">
                   <span>Pendiente al recoger</span>
                   <span>{totalPending} €</span>
                 </div>
               </div>
-            </div>
+
+              {error && (
+                <div className="border-l-2 border-tierra/35 pl-4 py-1 mb-6">
+                  <p className="text-tierra text-sm">{error}</p>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={loading}
+                className={clsx(
+                  "w-full bg-verde-bosque text-crema text-[11px] font-semibold tracking-[0.2em] uppercase py-5 px-6 transition-all duration-300 flex items-center justify-center gap-3",
+                  loading
+                    ? "opacity-60 cursor-not-allowed"
+                    : "hover:bg-verde-platano"
+                )}
+              >
+                {loading && (
+                  <span className="w-4 h-4 border border-crema/30 border-t-crema rounded-full animate-spin shrink-0" />
+                )}
+                {loading
+                  ? "Procesando..."
+                  : `Confirmar reserva — pagar ${totalDeposit > 0 ? totalDeposit : 1} €`}
+              </button>
+
+              <p className="text-[10px] font-medium text-negro/25 uppercase tracking-wider mt-4 text-center">
+                Pago seguro con Stripe · No guardamos datos de tu tarjeta
+              </p>
+            </StepSection>
           )}
 
-          {error && (
-            <div className="border-l-2 border-tierra/35 pl-4 py-1 mb-6">
-              <p className="text-tierra text-sm">{error}</p>
-            </div>
-          )}
-
-          <button
-            type="submit"
-            disabled={loading}
-            className={clsx(
-              "w-full bg-verde-bosque text-crema text-[11px] font-semibold tracking-[0.2em] uppercase py-5 px-6 transition-all duration-300 flex items-center justify-center gap-3",
-              loading ? "opacity-60 cursor-not-allowed" : "hover:bg-verde-platano"
-            )}
-          >
-            {loading && (
-              <span className="w-4 h-4 border border-crema/30 border-t-crema rounded-full animate-spin shrink-0" />
-            )}
-            {loading
-              ? "Procesando..."
-              : `Reservar y pagar ${totalDeposit > 0 ? totalDeposit : 1} €`}
-          </button>
-
-          <p className="text-[10px] font-medium text-negro/25 uppercase tracking-wider mt-4 text-center">
-            Pago seguro con Stripe · No guardamos datos de tu tarjeta
-          </p>
         </form>
       </div>
     </section>

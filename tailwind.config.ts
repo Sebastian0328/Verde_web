@@ -23,10 +23,15 @@ const config: Config = {
       },
       animation: {
         "fade-in": "fadeIn 0.9s ease-out forwards",
+        "step-in": "stepIn 0.3s ease-out forwards",
       },
       keyframes: {
         fadeIn: {
           "0%": { opacity: "0", transform: "translateY(14px)" },
+          "100%": { opacity: "1", transform: "translateY(0)" },
+        },
+        stepIn: {
+          "0%": { opacity: "0", transform: "translateY(6px)" },
           "100%": { opacity: "1", transform: "translateY(0)" },
         },
       },

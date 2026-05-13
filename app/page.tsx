@@ -39,52 +39,56 @@ export default async function HomePage() {
 
   return (
     <>
-      {/* Hero */}
-      <section className="relative min-h-screen flex flex-col items-center justify-center px-6 py-24 text-center">
+      {/* Hero — imagen arranca desde top:0, detrás del nav fijo */}
+      <section className="relative min-h-screen flex flex-col items-center justify-center px-6 pb-16 text-center">
         <Image
           src="/Fondo_Home.png"
           alt=""
           fill
-          className="object-cover"
+          className="object-cover object-center"
           priority
         />
-        <div className="relative z-10 max-w-3xl mx-auto">
-          <p className="animate-fade-in text-crema text-[10px] font-medium tracking-[0.45em] uppercase mb-10">
+        {/* Overlay sutil para mejorar contraste del texto */}
+        <div className="absolute inset-0 bg-negro/25" />
+
+        {/* pt-16 empuja el contenido por debajo del nav fijo (~64px) */}
+        <div className="relative z-10 max-w-xs mx-auto flex flex-col items-center pt-16">
+          <p className="animate-fade-in text-crema/60 text-[10px] font-medium tracking-[0.45em] uppercase mb-4">
             Madrid · Dark Kitchen
           </p>
 
-          <div className="animate-fade-in animation-delay-100 flex justify-center mb-10">
+          <div className="animate-fade-in animation-delay-100 flex justify-center mb-4">
             <Image
               src="/iconVerde.png"
               alt="Verde"
-              width={260}
-              height={260}
+              width={180}
+              height={180}
               priority
             />
           </div>
 
-          <p className="animate-fade-in animation-delay-200 text-crema text-lg sm:text-xl font-normal max-w-xs mx-auto leading-relaxed mb-4">
+          <p className="animate-fade-in animation-delay-200 text-crema text-base font-normal leading-snug mb-1">
             Realiza tus pedidos con antelación.
           </p>
 
-          <p className="animate-fade-in animation-delay-200 text-crema text-sm mb-14">
+          <p className="animate-fade-in animation-delay-200 text-crema/70 text-sm mb-6">
             Reserva con{" "}
             <span className="font-semibold text-oro">1 €</span>
             {" "}· se descuenta del precio final.
           </p>
 
-          <div className="animate-fade-in animation-delay-300">
+          <div className="animate-fade-in animation-delay-300 w-full">
             {reservationsOpen ? (
               <a
                 href="#reservar"
-                className="inline-block border border-crema/30 text-crema text-[11px] font-semibold tracking-[0.22em] uppercase px-10 py-4 hover:bg-crema hover:text-verde-bosque transition-all duration-300"
+                className="inline-block w-full bg-crema text-verde-bosque text-[11px] font-bold tracking-[0.25em] uppercase px-10 py-5 hover:bg-oro hover:text-negro transition-all duration-300 shadow-lg"
               >
                 Hacer mi reserva
               </a>
             ) : (
               <a
                 href="#waitlist"
-                className="inline-block border border-oro/40 text-oro text-[11px] font-semibold tracking-[0.22em] uppercase px-10 py-4 hover:bg-oro hover:text-negro transition-all duration-300"
+                className="inline-block w-full bg-oro text-negro text-[11px] font-bold tracking-[0.25em] uppercase px-10 py-5 hover:bg-crema transition-all duration-300 shadow-lg"
               >
                 Avisarme cuando abra
               </a>
@@ -92,7 +96,7 @@ export default async function HomePage() {
           </div>
         </div>
 
-        <div className="absolute bottom-8 left-1/2 -translate-x-1/2 text-crema/20 animate-bounce z-10" aria-hidden="true">
+        <div className="absolute bottom-8 left-1/2 -translate-x-1/2 text-crema/30 animate-bounce z-10" aria-hidden="true">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="6 9 12 15 18 9" />
           </svg>
