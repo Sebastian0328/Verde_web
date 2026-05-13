@@ -34,7 +34,7 @@ export default function RootLayout({
           <div className="max-w-5xl mx-auto flex items-center justify-between">
             <a href="/" className="opacity-90 hover:opacity-100 transition-opacity duration-200">
               <Image
-                src="/Verdeart.png"
+                src="/verdeart.png"
                 alt="Verde"
                 width={52}
                 height={52}
