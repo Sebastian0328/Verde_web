@@ -5,6 +5,7 @@ export interface ActivePromotion {
   promoName: string;
   promoType: "percentage";
   promoValue: number;
+  inactiveReason?: string;
 }
 
 export interface DiscountResult {
@@ -15,6 +16,35 @@ export interface DiscountResult {
   discountAmount: number;
   subtotalBeforeDiscount: number;
   totalAfterDiscount: number;
+}
+
+// Normalizes date strings from Google Sheets to "YYYY-MM-DD" regardless of locale.
+// Handles: ISO (2026-05-14), EU/Spanish (14/05/2026), US (5/14/2026).
+export function normalizeSheetDate(raw: string): string | null {
+  if (!raw) return null;
+  const s = raw.trim();
+  // Already ISO
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  // D(D)/M(M)/YYYY — could be EU (day first) or US (month first)
+  const parts = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (parts) {
+    const a = parseInt(parts[1], 10);
+    const b = parseInt(parts[2], 10);
+    const y = parts[3];
+    // a > 12 → cannot be month → DD/MM/YYYY (EU: "14/05/2026")
+    if (a > 12 && b >= 1 && b <= 12) {
+      return `${y}-${String(b).padStart(2, "0")}-${String(a).padStart(2, "0")}`;
+    }
+    // b > 12 → cannot be month → MM/DD/YYYY (US: "5/14/2026")
+    if (b > 12 && a >= 1 && a <= 12) {
+      return `${y}-${String(a).padStart(2, "0")}-${String(b).padStart(2, "0")}`;
+    }
+    // Ambiguous (e.g. 5/6/2026) — default to EU (DD/MM) since locale is Spain
+    if (a >= 1 && a <= 31 && b >= 1 && b <= 12) {
+      return `${y}-${String(b).padStart(2, "0")}-${String(a).padStart(2, "0")}`;
+    }
+  }
+  return null;
 }
 
 // Para activar/desactivar:  Settings → promoEnabled = TRUE / FALSE
@@ -28,18 +58,53 @@ export function getActivePromotion(settings: Settings): ActivePromotion {
     promoValue: settings.promoValue ?? 0,
   };
 
-  if (!settings.promoEnabled) return base;
-
   const today = new Date().toISOString().slice(0, 10);
-  if (settings.promoStartDate && today < settings.promoStartDate) return base;
-  if (settings.promoEndDate && today > settings.promoEndDate) return base;
+  const startNormalized = normalizeSheetDate(settings.promoStartDate ?? "");
+  const endNormalized   = normalizeSheetDate(settings.promoEndDate ?? "");
 
-  if (!settings.promoValue || settings.promoValue <= 0 || settings.promoValue > 100) {
-    console.warn("[promotions] promoValue fuera de rango:", settings.promoValue);
-    return base;
+  // Normalize promoEnabled — accepts boolean true, "TRUE", "true", etc.
+  const enabled = String(settings.promoEnabled).trim().toLowerCase() === "true";
+
+  console.log("[promotions] promoEnabled raw:", settings.promoEnabled, "→ enabled:", enabled);
+  console.log("[promotions] promoName:", settings.promoName);
+  console.log("[promotions] promoType:", settings.promoType);
+  console.log("[promotions] promoValue:", settings.promoValue);
+  console.log("[promotions] promoStartDate raw:", settings.promoStartDate, "→ normalized:", startNormalized);
+  console.log("[promotions] promoEndDate raw:", settings.promoEndDate, "→ normalized:", endNormalized);
+  console.log("[promotions] today:", today);
+
+  if (!enabled) {
+    console.log("[promotions] isPromoActive: false → promo disabled");
+    return { ...base, inactiveReason: "promo disabled" };
   }
 
-  return { ...base, isActive: true };
+  if (!settings.promoName || !settings.promoName.trim()) {
+    console.log("[promotions] isPromoActive: false → missing promoName");
+    return { ...base, inactiveReason: "missing promoName" };
+  }
+
+  if (settings.promoType !== "percentage") {
+    console.log("[promotions] isPromoActive: false → invalid type:", settings.promoType);
+    return { ...base, inactiveReason: "invalid type" };
+  }
+
+  if (!settings.promoValue || settings.promoValue <= 0 || settings.promoValue > 100) {
+    console.warn("[promotions] isPromoActive: false → invalid value:", settings.promoValue);
+    return { ...base, inactiveReason: "invalid value" };
+  }
+
+  if (startNormalized && today < startNormalized) {
+    console.log(`[promotions] isPromoActive: false → before start date (today ${today} < start ${startNormalized})`);
+    return { ...base, inactiveReason: "before start date" };
+  }
+
+  if (endNormalized && today > endNormalized) {
+    console.log(`[promotions] isPromoActive: false → after end date (today ${today} > end ${endNormalized})`);
+    return { ...base, inactiveReason: "after end date" };
+  }
+
+  console.log("[promotions] isPromoActive: true →", settings.promoName, settings.promoValue + "%");
+  return { ...base, isActive: true, inactiveReason: undefined };
 }
 
 export function calculateDiscount(subtotal: number, promo: ActivePromotion): DiscountResult {
@@ -56,9 +121,9 @@ export function calculateDiscount(subtotal: number, promo: ActivePromotion): Dis
   if (!promo.isActive || subtotal <= 0) return base;
 
   // Integer cents to avoid floating-point drift
-  const subtotalCents = Math.round(subtotal * 100);
-  const discountCents = Math.round(subtotalCents * promo.promoValue / 100);
-  const totalCents = Math.max(0, subtotalCents - discountCents);
+  const subtotalCents  = Math.round(subtotal * 100);
+  const discountCents  = Math.round(subtotalCents * promo.promoValue / 100);
+  const totalCents     = Math.max(0, subtotalCents - discountCents);
 
   return {
     isActive: true,

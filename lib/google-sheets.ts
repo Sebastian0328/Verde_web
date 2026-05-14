@@ -120,7 +120,13 @@ export async function getSettings(): Promise<Settings> {
   const rows = await getSheetValues("Settings!A2:C");
   const map: Record<string, string> = {};
   for (const row of rows) {
-    if (row[0]) map[row[0]] = row[1] ?? "";
+    const keyRaw = row[0] ?? "";
+    const keyTrimmed = keyRaw.trim();
+    if (!keyTrimmed) continue;
+    if (keyTrimmed in map) {
+      console.warn(`[settings] Duplicate setting key detected: "${keyTrimmed}"`);
+    }
+    map[keyTrimmed] = (row[1] ?? "").trim();
   }
   return {
     reservationStartTime: map["reservationStartTime"] ?? "09:00",
@@ -128,14 +134,27 @@ export async function getSettings(): Promise<Settings> {
     slotIntervalMinutes: parseInt(map["slotIntervalMinutes"] ?? "60", 10) || 60,
     minLeadDays: parseInt(map["minLeadDays"] ?? "1", 10) || 1,
     currency: map["currency"] ?? "eur",
-    reservationsOpen: (map["reservationsOpen"] ?? "TRUE").toUpperCase() === "TRUE",
-    promoEnabled: (map["promoEnabled"] ?? "FALSE").toUpperCase() === "TRUE",
+    reservationsOpen: (map["reservationsOpen"] ?? "TRUE").trim().toUpperCase() === "TRUE",
+    promoEnabled: (map["promoEnabled"] ?? "FALSE").trim().toUpperCase() === "TRUE",
     promoName: map["promoName"] ?? "",
     promoType: map["promoType"] ?? "percentage",
     promoValue: parseFloat(map["promoValue"] ?? "0") || 0,
     promoStartDate: map["promoStartDate"] ?? "",
     promoEndDate: map["promoEndDate"] ?? "",
   };
+}
+
+// Returns raw rows from the Settings sheet for diagnostic purposes.
+export async function getSettingsRawRows(): Promise<
+  { keyRaw: string; keyTrimmed: string; valueRaw: string; valueTrimmed: string }[]
+> {
+  const rows = await getSheetValues("Settings!A2:C");
+  return rows.map((row) => ({
+    keyRaw: row[0] ?? "",
+    keyTrimmed: (row[0] ?? "").trim(),
+    valueRaw: row[1] ?? "",
+    valueTrimmed: (row[1] ?? "").trim(),
+  }));
 }
 
 // ─── Availability ─────────────────────────────────────────────────────────────

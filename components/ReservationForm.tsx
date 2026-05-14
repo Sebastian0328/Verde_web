@@ -54,6 +54,8 @@ const INITIAL_FIELDS: FormFields = {
   deliveryZone: "",
 };
 
+const STORAGE_KEY = "verde_customer_data";
+
 const inputClass =
   "w-full border-0 border-b border-negro/15 bg-transparent px-0 py-2.5 text-sm text-negro placeholder:text-negro/28 focus:outline-none focus:border-verde-bosque transition-colors duration-200";
 
@@ -224,6 +226,9 @@ export default function ReservationForm({
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [availability, setAvailability] = useState<DayAvailability[]>([]);
   const [loadingAvailability, setLoadingAvailability] = useState(true);
+  const [saveData, setSaveData] = useState(false);
+  const [savedDataDetected, setSavedDataDetected] = useState(false);
+  const [livePromotion, setLivePromotion] = useState<ActivePromotion | null>(promotion ?? null);
 
   // Individual refs — hooks cannot be in arrays
   const ref1 = useRef<HTMLDivElement>(null);
@@ -240,6 +245,44 @@ export default function ReservationForm({
       .then((data) => setAvailability(Array.isArray(data) ? data : []))
       .catch(() => setAvailability([]))
       .finally(() => setLoadingAvailability(false));
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return;
+      const saved = JSON.parse(raw);
+      setSavedDataDetected(true);
+      setFields((prev) => ({
+        ...prev,
+        customerName: saved.customerName || prev.customerName,
+        email: saved.email || prev.email,
+        phone: saved.phone || prev.phone,
+        deliveryAddress: saved.deliveryAddress || prev.deliveryAddress,
+        deliveryDetails: saved.deliveryDetails || prev.deliveryDetails,
+        postalCode: saved.postalCode || prev.postalCode,
+        deliveryZone: saved.deliveryZone || prev.deliveryZone,
+        deliveryMethod: saved.deliveryMethod || prev.deliveryMethod,
+      }));
+    } catch {
+      // ignore malformed stored data
+    }
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/promotion")
+      .then((r) => r.json())
+      .then((data) => {
+        if (data && !data.error) {
+          setLivePromotion(
+            data.isActive
+              ? { isActive: true, promoName: data.promoName, promoType: "percentage" as const, promoValue: Number(data.promoValue) }
+              : null
+          );
+        }
+      })
+      .catch(() => {});
   }, []);
 
   function goToStep(step: number) {
@@ -300,6 +343,24 @@ export default function ReservationForm({
     setError(null);
   }
 
+  function clearSavedData() {
+    if (typeof window === "undefined") return;
+    localStorage.removeItem(STORAGE_KEY);
+    setSavedDataDetected(false);
+    setSaveData(false);
+    setFields((prev) => ({
+      ...prev,
+      customerName: "",
+      email: "",
+      phone: "",
+      deliveryAddress: "",
+      deliveryDetails: "",
+      postalCode: "",
+      deliveryZone: "",
+      deliveryMethod: "delivery",
+    }));
+  }
+
   // ── Derived values (unchanged from original) ──
 
   const selectedDay = availability.find((d) => d.date === fields.reservationDate);
@@ -316,11 +377,11 @@ export default function ReservationForm({
   );
   const totalPending = totalFinal - totalDeposit;
 
-  // Discount — mirrors server calculation; backend is always source of truth
+  // Discount — visual estimate only; backend is always source of truth
   const subtotalCents = Math.round(totalDeposit * 100);
   const discountCents =
-    promotion?.isActive && totalDeposit > 0
-      ? Math.round(subtotalCents * promotion.promoValue / 100)
+    livePromotion?.isActive && totalDeposit > 0
+      ? Math.round(subtotalCents * livePromotion.promoValue / 100)
       : 0;
   const discountAmount = discountCents / 100;
   const totalAfterDiscount = (subtotalCents - discountCents) / 100;
@@ -389,6 +450,24 @@ export default function ReservationForm({
     if (!privacyAccepted || !termsAccepted) {
       setError("Debes aceptar la política de privacidad y las condiciones para continuar.");
       return;
+    }
+
+    if (saveData && typeof window !== "undefined") {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({
+          customerName: fields.customerName,
+          email: fields.email,
+          phone: fields.phone,
+          deliveryAddress: fields.deliveryAddress,
+          deliveryDetails: fields.deliveryDetails,
+          postalCode: fields.postalCode,
+          deliveryZone: fields.deliveryZone,
+          deliveryMethod: fields.deliveryMethod,
+          savedAt: new Date().toISOString(),
+        }));
+      } catch {
+        // ignore storage errors
+      }
     }
 
     setLoading(true);
@@ -557,11 +636,11 @@ export default function ReservationForm({
           <p className="text-negro/50 text-sm leading-relaxed">
             Añade uno o varios productos y paga online de forma segura.
           </p>
-          {promotion?.isActive && (
+          {livePromotion?.isActive && (
             <div className="mt-4 inline-flex items-center gap-2 border border-verde-bosque/20 bg-verde-bosque/5 px-3 py-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-verde-platano shrink-0" />
               <p className="text-[11px] font-medium text-verde-bosque/80">
-                {promotion.promoName}: {promotion.promoValue}% de descuento esta semana
+                {livePromotion.promoName}: {livePromotion.promoValue}% de descuento esta semana
               </p>
             </div>
           )}
@@ -757,6 +836,21 @@ export default function ReservationForm({
               }
               onEdit={() => goToStep(4)}
             >
+              {savedDataDetected && (
+                <div className="mb-6 flex items-start justify-between gap-4 border-l-2 border-verde-bosque/30 pl-3 py-1">
+                  <p className="text-xs text-negro/45 leading-relaxed">
+                    Usamos tus datos guardados en este dispositivo para completar el formulario más rápido.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={clearSavedData}
+                    className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.15em] text-negro/30 hover:text-tierra transition-colors underline underline-offset-2"
+                  >
+                    Borrar
+                  </button>
+                </div>
+              )}
+
               <div className="grid gap-8 sm:grid-cols-2">
                 <div>
                   <label htmlFor="customerName" className={labelClass}>
@@ -957,12 +1051,31 @@ export default function ReservationForm({
                 </>
               )}
 
+              <div className="mt-6 mb-4 border border-negro/8 bg-negro/[0.02] p-4">
+                <label className="flex items-start gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={saveData}
+                    onChange={(e) => setSaveData(e.target.checked)}
+                    className="mt-0.5 shrink-0 w-4 h-4 accent-verde-bosque cursor-pointer"
+                  />
+                  <div>
+                    <span className="text-xs font-medium text-negro/70">
+                      Guardar mis datos para mi próxima compra
+                    </span>
+                    <p className="text-[10px] text-negro/40 leading-relaxed mt-1">
+                      Guardaremos tus datos solo en este dispositivo para que no tengas que rellenarlos de nuevo. No guardamos datos de pago.
+                    </p>
+                  </div>
+                </label>
+              </div>
+
               <button
                 type="button"
                 disabled={!step5Done}
                 onClick={() => step5Done && goToStep(6)}
                 className={clsx(
-                  "mt-6 w-full text-[11px] font-semibold tracking-[0.2em] uppercase py-4 px-6 transition-all duration-300",
+                  "w-full text-[11px] font-semibold tracking-[0.2em] uppercase py-4 px-6 transition-all duration-300",
                   step5Done
                     ? "bg-verde-bosque text-crema hover:bg-verde-platano"
                     : "bg-negro/8 text-negro/30 cursor-not-allowed"
@@ -1044,14 +1157,14 @@ export default function ReservationForm({
 
               {/* Totals */}
               <div className="space-y-2 border-t border-negro/10 pt-4 mb-8 text-sm">
-                {promotion?.isActive && discountAmount > 0 ? (
+                {livePromotion?.isActive && discountAmount > 0 ? (
                   <>
                     <div className="flex justify-between text-negro/50">
                       <span>Subtotal</span>
                       <span>{totalDeposit} €</span>
                     </div>
                     <div className="flex justify-between text-verde-bosque/75">
-                      <span>{promotion.promoName} −{promotion.promoValue}%</span>
+                      <span>{livePromotion.promoName} −{livePromotion.promoValue}%</span>
                       <span>−{discountAmount} €</span>
                     </div>
                     <div className="flex justify-between pt-2 mt-1 font-semibold text-verde-bosque border-t border-negro/8">

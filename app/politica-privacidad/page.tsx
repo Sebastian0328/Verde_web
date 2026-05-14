@@ -69,6 +69,18 @@ export default function PoliticaPrivacidadPage() {
 
           <div>
             <h2 className="text-negro text-xs font-semibold uppercase tracking-[0.2em] mb-3">
+              Datos guardados en tu dispositivo
+            </h2>
+            <p>
+              Si marcas la opción &ldquo;Guardar mis datos para mi próxima compra&rdquo;, guardaremos
+              localmente en tu dispositivo algunos datos de contacto y entrega para facilitar futuras
+              compras. Estos datos no incluyen información de pago y puedes eliminarlos desde el
+              formulario en cualquier momento haciendo clic en &ldquo;Borrar&rdquo; junto al aviso de datos guardados.
+            </p>
+          </div>
+
+          <div>
+            <h2 className="text-negro text-xs font-semibold uppercase tracking-[0.2em] mb-3">
               Responsable
             </h2>
             <p>VERDE · verdemadrid.com</p>
