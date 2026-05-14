@@ -147,11 +147,11 @@ export async function POST(req: NextRequest) {
       }))
     );
 
-    // Apple Pay, Google Pay y Link se gestionan desde Stripe Dashboard y dependen
-    // del dispositivo, navegador, país, moneda y dominio configurado en Stripe.
+    // Stripe Checkout mostrará métodos de pago disponibles según la configuración del Dashboard,
+    // el país, la moneda, el dominio y el dispositivo. No limitar con payment_method_types
+    // para permitir Apple Pay, Google Pay y Link cuando estén disponibles.
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
-      automatic_payment_methods: { enabled: true },
       line_items: lineItems,
       metadata: {
         items: itemsMeta,
