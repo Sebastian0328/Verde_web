@@ -2,6 +2,8 @@ import Image from "next/image";
 import { getAvailableProducts } from "@/lib/products";
 import { getProductsRows, getSettings } from "@/lib/google-sheets";
 import { storeConfig } from "@/lib/store-config";
+import { getActivePromotion } from "@/lib/promotions";
+import type { ActivePromotion } from "@/lib/promotions";
 import HowItWorks from "@/components/HowItWorks";
 import ReservationForm from "@/components/ReservationForm";
 import ClosedState from "@/components/ClosedState";
@@ -12,6 +14,7 @@ export const dynamic = "force-dynamic";
 export default async function HomePage() {
   let products: Product[] = getAvailableProducts();
   let reservationsOpen = storeConfig.reservationsOpen;
+  let activePromotion: ActivePromotion | null = null;
 
   try {
     const [sheetsProducts, settings] = await Promise.all([
@@ -32,6 +35,8 @@ export default async function HomePage() {
       }));
     }
     reservationsOpen = settings.reservationsOpen;
+    const promo = getActivePromotion(settings);
+    if (promo.isActive) activePromotion = promo;
   } catch {
     // fallback to static config/products
   }
@@ -108,7 +113,7 @@ export default async function HomePage() {
       {/* Reserva o estado cerrado */}
       {reservationsOpen ? (
         <section className="bg-crema py-2" id="reservar">
-          <ReservationForm products={products} config={config} />
+          <ReservationForm products={products} config={config} promotion={activePromotion} />
         </section>
       ) : (
         <ClosedState message={storeConfig.closedMessage} />

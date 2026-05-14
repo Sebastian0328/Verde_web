@@ -27,8 +27,9 @@ export interface CustomerReservationEmailProps {
   deliveryZone?: string;
   depositPaid: number;
   pendingAmount: number;
-  // Future: replace text logo with final brand logo image
-  // logoUrl?: string;
+  subtotalBeforeDiscount?: number;
+  discountAmount?: number;
+  promoName?: string;
 }
 
 // ─── Brand palette ───────────────────────────────────────────────────────────
@@ -115,9 +116,12 @@ export function CustomerReservationEmail({
   postalCode,
   depositPaid,
   pendingAmount,
+  subtotalBeforeDiscount,
+  discountAmount,
+  promoName,
 }: CustomerReservationEmailProps) {
   const isDelivery = !deliveryMethod || deliveryMethod === "delivery";
-  const totalFinal = depositPaid + pendingAmount;
+  const hasDiscount = !!discountAmount && discountAmount > 0;
 
   return (
     <Html lang="es">
@@ -310,6 +314,16 @@ export function CustomerReservationEmail({
                   <SectionLabel>Pago</SectionLabel>
                   <table width="100%" cellPadding={0} cellSpacing={0}>
                     <tbody>
+                      {hasDiscount && subtotalBeforeDiscount !== undefined && (
+                        <>
+                          <Row label="Subtotal" value={`${subtotalBeforeDiscount} €`} />
+                          <Row
+                            label={promoName ?? "Descuento"}
+                            value={`−${discountAmount} €`}
+                            accent
+                          />
+                        </>
+                      )}
                       <Row label="Total pagado" value={`${depositPaid} €`} strong />
                       {pendingAmount > 0 && (
                         <Row label="Pendiente" value={`${pendingAmount} €`} />

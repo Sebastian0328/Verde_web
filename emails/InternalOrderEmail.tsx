@@ -33,6 +33,9 @@ export interface InternalOrderEmailProps {
   privacyAccepted?: boolean;
   termsAccepted?: boolean;
   acceptedAt?: string;
+  subtotalBeforeDiscount?: number;
+  discountAmount?: number;
+  promoName?: string;
 }
 
 const V = {
@@ -113,9 +116,12 @@ export function InternalOrderEmail({
   privacyAccepted,
   termsAccepted,
   acceptedAt,
+  subtotalBeforeDiscount,
+  discountAmount,
+  promoName,
 }: InternalOrderEmailProps) {
   const isDelivery = !deliveryMethod || deliveryMethod === "delivery";
-  const totalFinal = depositPaid + pendingAmount;
+  const hasDiscount = !!discountAmount && discountAmount > 0;
 
   return (
     <Html lang="es">
@@ -348,7 +354,15 @@ export function InternalOrderEmail({
                   <BlockTitle>Pago</BlockTitle>
                   <table width="100%" cellPadding={0} cellSpacing={0}>
                     <tbody>
-                      <DataRow label="Total pedido" value={`${totalFinal} €`} />
+                      {hasDiscount && subtotalBeforeDiscount !== undefined && (
+                        <>
+                          <DataRow label="Subtotal" value={`${subtotalBeforeDiscount} €`} />
+                          <DataRow
+                            label={`Descuento (${promoName ?? "promo"})`}
+                            value={`−${discountAmount} €`}
+                          />
+                        </>
+                      )}
                       <DataRow label="Total pagado" value={`${depositPaid} €`} />
                       <DataRow label="Pendiente" value={`${pendingAmount} €`} />
                     </tbody>

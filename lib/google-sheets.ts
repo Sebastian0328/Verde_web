@@ -107,6 +107,13 @@ export interface Settings {
   minLeadDays: number;
   currency: string;
   reservationsOpen: boolean;
+  // Promotion fields
+  promoEnabled: boolean;
+  promoName: string;
+  promoType: string;
+  promoValue: number;
+  promoStartDate: string;
+  promoEndDate: string;
 }
 
 export async function getSettings(): Promise<Settings> {
@@ -122,6 +129,12 @@ export async function getSettings(): Promise<Settings> {
     minLeadDays: parseInt(map["minLeadDays"] ?? "1", 10) || 1,
     currency: map["currency"] ?? "eur",
     reservationsOpen: (map["reservationsOpen"] ?? "TRUE").toUpperCase() === "TRUE",
+    promoEnabled: (map["promoEnabled"] ?? "FALSE").toUpperCase() === "TRUE",
+    promoName: map["promoName"] ?? "",
+    promoType: map["promoType"] ?? "percentage",
+    promoValue: parseFloat(map["promoValue"] ?? "0") || 0,
+    promoStartDate: map["promoStartDate"] ?? "",
+    promoEndDate: map["promoEndDate"] ?? "",
   };
 }
 
@@ -249,6 +262,13 @@ export interface OrderRow {
   privacyAccepted: boolean;
   termsAccepted: boolean;
   acceptedAt: string;
+  // Discount (columns X–AC)
+  discountName: string;
+  discountType: string;
+  discountValue: number;
+  discountAmount: number;
+  subtotalBeforeDiscount: number;
+  totalAfterDiscount: number;
 }
 
 export async function appendOrderToSheet(order: OrderRow): Promise<void> {
@@ -280,11 +300,18 @@ export async function appendOrderToSheet(order: OrderRow): Promise<void> {
     order.privacyAccepted ? "TRUE" : "FALSE",
     order.termsAccepted ? "TRUE" : "FALSE",
     order.acceptedAt,
+    // Discount — columns X, Y, Z, AA, AB, AC
+    order.discountName,
+    order.discountType,
+    order.discountValue,
+    order.discountAmount,
+    order.subtotalBeforeDiscount,
+    order.totalAfterDiscount,
   ];
 
   await sheets.spreadsheets.values.append({
     spreadsheetId: getSpreadsheetId(),
-    range: "Orders!A:W",
+    range: "Orders!A:AC",
     valueInputOption: "USER_ENTERED",
     requestBody: { values: [row] },
   });

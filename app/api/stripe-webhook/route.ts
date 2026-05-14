@@ -85,6 +85,14 @@ export async function POST(req: NextRequest) {
       console.warn("[stripe-webhook] Aceptaciones legales faltantes en sesión:", session.id);
     }
 
+    const promoApplied = meta.promoApplied === "true";
+    const promoName = meta.promoName ?? "";
+    const promoType = meta.promoType ?? "";
+    const promoValue = parseFloat(meta.promoValue ?? "0");
+    const discountAmount = parseFloat(meta.discountAmount ?? "0");
+    const subtotalBeforeDiscount = parseFloat(meta.subtotalBeforeDiscount ?? "0");
+    const totalAfterDiscount = parseFloat(meta.totalAfterDiscount ?? "0");
+
     // Re-validate slot availability before saving
     let slotStillAvailable = false;
     try {
@@ -123,6 +131,12 @@ export async function POST(req: NextRequest) {
           privacyAccepted,
           termsAccepted,
           acceptedAt,
+          discountName: promoApplied ? promoName : "",
+          discountType: promoApplied ? promoType : "",
+          discountValue: promoApplied ? promoValue : 0,
+          discountAmount,
+          subtotalBeforeDiscount,
+          totalAfterDiscount,
         });
       }
 
@@ -150,6 +164,9 @@ export async function POST(req: NextRequest) {
           reservationTime,
           depositPaid: totalDeposit,
           pendingAmount: totalPending,
+          subtotalBeforeDiscount: promoApplied ? subtotalBeforeDiscount : undefined,
+          discountAmount: promoApplied ? discountAmount : undefined,
+          promoName: promoApplied ? promoName : undefined,
           notes: meta.notes,
           ...deliveryEmailFields,
         });
@@ -163,6 +180,9 @@ export async function POST(req: NextRequest) {
           reservationTime,
           depositPaid: totalDeposit,
           pendingAmount: totalPending,
+          subtotalBeforeDiscount: promoApplied ? subtotalBeforeDiscount : undefined,
+          discountAmount: promoApplied ? discountAmount : undefined,
+          promoName: promoApplied ? promoName : undefined,
           notes: meta.notes,
           stripeSessionId: session.id,
           privacyAccepted,

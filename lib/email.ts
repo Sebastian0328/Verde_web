@@ -37,6 +37,9 @@ export interface ConfirmationEmailData {
   privacyAccepted?: boolean;
   termsAccepted?: boolean;
   acceptedAt?: string;
+  subtotalBeforeDiscount?: number;
+  discountAmount?: number;
+  promoName?: string;
 }
 
 // ─── Customer confirmation ────────────────────────────────────────────────────
@@ -59,8 +62,11 @@ export async function sendConfirmationToCustomer(
       deliveryDetails: data.deliveryDetails,
       postalCode:      data.postalCode,
       deliveryZone:    data.deliveryZone,
-      depositPaid:     data.depositPaid,
-      pendingAmount:   data.pendingAmount,
+      depositPaid:              data.depositPaid,
+      pendingAmount:            data.pendingAmount,
+      subtotalBeforeDiscount:   data.subtotalBeforeDiscount,
+      discountAmount:           data.discountAmount,
+      promoName:                data.promoName,
     }),
   });
 }
@@ -89,10 +95,13 @@ export async function sendInternalOrderNotification(
       depositPaid:     data.depositPaid,
       pendingAmount:   data.pendingAmount,
       notes:           data.notes,
-      stripeSessionId:  data.stripeSessionId,
-      privacyAccepted:  data.privacyAccepted,
-      termsAccepted:    data.termsAccepted,
-      acceptedAt:       data.acceptedAt,
+      stripeSessionId:          data.stripeSessionId,
+      privacyAccepted:          data.privacyAccepted,
+      termsAccepted:            data.termsAccepted,
+      acceptedAt:               data.acceptedAt,
+      subtotalBeforeDiscount:   data.subtotalBeforeDiscount,
+      discountAmount:           data.discountAmount,
+      promoName:                data.promoName,
     }),
   });
 }

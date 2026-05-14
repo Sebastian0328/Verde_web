@@ -4,6 +4,7 @@ import { getProductById } from "@/lib/products";
 import { getProductsRows, getSettings } from "@/lib/google-sheets";
 import { isSlotAvailable } from "@/lib/availability";
 import { reservationSchema } from "@/lib/validators";
+import { getActivePromotion, calculateDiscount } from "@/lib/promotions";
 import { ZodError } from "zod";
 
 export async function POST(req: NextRequest) {
@@ -103,39 +104,51 @@ export async function POST(req: NextRequest) {
       };
     });
 
-    const totalDeposit = validatedItems.reduce(
+    // ── Calcular subtotal, descuento y total ──────────────────────────────────
+    const productsSubtotal = validatedItems.reduce(
       (s, { product, quantity }) => s + product.depositAmount * quantity,
       0
     );
-    const totalFinal = validatedItems.reduce(
-      (s, { product, quantity }) => s + product.finalPrice * quantity,
-      0
-    );
-    const totalPending = totalFinal - totalDeposit;
     const totalItems = validatedItems.reduce((s, { quantity }) => s + quantity, 0);
+
+    const promo = getActivePromotion(settings);
+    const discount = calculateDiscount(productsSubtotal, promo);
+
+    console.log(
+      `[checkout] subtotal=${discount.subtotalBeforeDiscount} ` +
+      `discount=${discount.discountAmount} ` +
+      `total=${discount.totalAfterDiscount} ` +
+      `promoActive=${discount.isActive} promoName="${discount.promoName}"`
+    );
 
     const appUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
     const acceptedAt = new Date().toISOString();
 
-    const lineItems = validatedItems.map(({ product, quantity }) => {
-      const amountToCharge = Math.round(product.depositAmount * 100);
-      console.log(
-        `[checkout] productId=${product.id} finalPrice=${product.finalPrice} ` +
-        `depositAmount=${product.depositAmount} quantity=${quantity} ` +
-        `amountToCharge=${amountToCharge} (cents)`
-      );
-      return {
+    // Un único line item con el total final. El detalle de productos va en metadata.
+    const productSummary = validatedItems
+      .map(({ product, quantity }) => `${product.name} ×${quantity}`)
+      .join(", ");
+
+    const lineItemDescription = discount.isActive
+      ? `${productSummary} — ${discount.promoName} −${discount.promoValue}%`
+      : productSummary;
+
+    // Stripe Checkout mostrará métodos de pago disponibles según la configuración del Dashboard,
+    // el país, la moneda, el dominio y el dispositivo. No limitar con payment_method_types
+    // para permitir Apple Pay, Google Pay y Link cuando estén disponibles.
+    const lineItems = [
+      {
         price_data: {
           currency: settings.currency,
-          unit_amount: amountToCharge,
+          unit_amount: Math.round(discount.totalAfterDiscount * 100),
           product_data: {
-            name: product.name,
-            description: `${quantity} × ${product.finalPrice} €`,
+            name: "Pedido Verde",
+            description: lineItemDescription,
           },
         },
-        quantity,
-      };
-    });
+        quantity: 1,
+      },
+    ];
 
     const itemsMeta = JSON.stringify(
       validatedItems.map(({ product, quantity }) => ({
@@ -147,9 +160,6 @@ export async function POST(req: NextRequest) {
       }))
     );
 
-    // Stripe Checkout mostrará métodos de pago disponibles según la configuración del Dashboard,
-    // el país, la moneda, el dominio y el dispositivo. No limitar con payment_method_types
-    // para permitir Apple Pay, Google Pay y Link cuando estén disponibles.
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       line_items: lineItems,
@@ -167,12 +177,20 @@ export async function POST(req: NextRequest) {
         postalCode: parsed.postalCode ?? "",
         deliveryZone: parsed.deliveryZone ?? "",
         totalItems: String(totalItems),
-        totalFinal: String(totalFinal),
-        totalDeposit: String(totalDeposit),
-        totalPending: String(totalPending),
+        totalFinal: String(productsSubtotal),
+        totalDeposit: String(discount.totalAfterDiscount), // monto real cobrado
+        totalPending: "0",
         privacyAccepted: String(parsed.privacyAccepted),
         termsAccepted: String(parsed.termsAccepted),
         acceptedAt,
+        // Promoción
+        promoApplied: String(discount.isActive),
+        promoName: discount.promoName,
+        promoType: discount.promoType,
+        promoValue: String(discount.promoValue),
+        discountAmount: String(discount.discountAmount),
+        subtotalBeforeDiscount: String(discount.subtotalBeforeDiscount),
+        totalAfterDiscount: String(discount.totalAfterDiscount),
       },
       customer_email: parsed.email,
       success_url: `${appUrl}/gracias?session_id={CHECKOUT_SESSION_ID}`,

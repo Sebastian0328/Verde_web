@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import type { Product } from "@/lib/products";
 import type { StoreConfig } from "@/lib/store-config";
+import type { ActivePromotion } from "@/lib/promotions";
 import ProductCard from "./ProductCard";
 import clsx from "clsx";
 
@@ -22,6 +23,7 @@ interface DayAvailability {
 interface ReservationFormProps {
   products: Product[];
   config: StoreConfig;
+  promotion?: ActivePromotion | null;
 }
 
 interface FormFields {
@@ -210,6 +212,7 @@ function StepSection({
 export default function ReservationForm({
   products,
   config,
+  promotion,
 }: ReservationFormProps) {
   const [currentStep, setCurrentStep] = useState(1);
   const [maxStep, setMaxStep] = useState(1);
@@ -312,6 +315,15 @@ export default function ReservationForm({
     0
   );
   const totalPending = totalFinal - totalDeposit;
+
+  // Discount — mirrors server calculation; backend is always source of truth
+  const subtotalCents = Math.round(totalDeposit * 100);
+  const discountCents =
+    promotion?.isActive && totalDeposit > 0
+      ? Math.round(subtotalCents * promotion.promoValue / 100)
+      : 0;
+  const discountAmount = discountCents / 100;
+  const totalAfterDiscount = (subtotalCents - discountCents) / 100;
 
   const monthMap: Record<string, DayAvailability[]> = {};
   for (const day of availability) {
@@ -545,6 +557,14 @@ export default function ReservationForm({
           <p className="text-negro/50 text-sm leading-relaxed">
             Añade uno o varios productos y paga online de forma segura.
           </p>
+          {promotion?.isActive && (
+            <div className="mt-4 inline-flex items-center gap-2 border border-verde-bosque/20 bg-verde-bosque/5 px-3 py-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-verde-platano shrink-0" />
+              <p className="text-[11px] font-medium text-verde-bosque/80">
+                {promotion.promoName}: {promotion.promoValue}% de descuento esta semana
+              </p>
+            </div>
+          )}
         </div>
 
         <form onSubmit={handleSubmit} noValidate>
@@ -1024,10 +1044,27 @@ export default function ReservationForm({
 
               {/* Totals */}
               <div className="space-y-2 border-t border-negro/10 pt-4 mb-8 text-sm">
-                <div className="flex justify-between pt-2 font-semibold text-verde-bosque">
-                  <span>Total a pagar hoy</span>
-                  <span>{totalDeposit} €</span>
-                </div>
+                {promotion?.isActive && discountAmount > 0 ? (
+                  <>
+                    <div className="flex justify-between text-negro/50">
+                      <span>Subtotal</span>
+                      <span>{totalDeposit} €</span>
+                    </div>
+                    <div className="flex justify-between text-verde-bosque/75">
+                      <span>{promotion.promoName} −{promotion.promoValue}%</span>
+                      <span>−{discountAmount} €</span>
+                    </div>
+                    <div className="flex justify-between pt-2 mt-1 font-semibold text-verde-bosque border-t border-negro/8">
+                      <span>Total a pagar hoy</span>
+                      <span>{totalAfterDiscount} €</span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex justify-between pt-2 font-semibold text-verde-bosque">
+                    <span>Total a pagar hoy</span>
+                    <span>{totalDeposit} €</span>
+                  </div>
+                )}
               </div>
 
               {/* ── Aceptación legal ── */}
