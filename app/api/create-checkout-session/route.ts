@@ -115,18 +115,27 @@ export async function POST(req: NextRequest) {
     const totalItems = validatedItems.reduce((s, { quantity }) => s + quantity, 0);
 
     const appUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+    const acceptedAt = new Date().toISOString();
 
-    const lineItems = validatedItems.map(({ product, quantity }) => ({
-      price_data: {
-        currency: settings.currency,
-        unit_amount: Math.round(product.depositAmount * 100),
-        product_data: {
-          name: `Reserva — ${product.name}`,
-          description: `${quantity} × ${product.finalPrice} €. Resto al recoger.`,
+    const lineItems = validatedItems.map(({ product, quantity }) => {
+      const amountToCharge = Math.round(product.depositAmount * 100);
+      console.log(
+        `[checkout] productId=${product.id} finalPrice=${product.finalPrice} ` +
+        `depositAmount=${product.depositAmount} quantity=${quantity} ` +
+        `amountToCharge=${amountToCharge} (cents)`
+      );
+      return {
+        price_data: {
+          currency: settings.currency,
+          unit_amount: amountToCharge,
+          product_data: {
+            name: product.name,
+            description: `${quantity} × ${product.finalPrice} €`,
+          },
         },
-      },
-      quantity,
-    }));
+        quantity,
+      };
+    });
 
     const itemsMeta = JSON.stringify(
       validatedItems.map(({ product, quantity }) => ({
@@ -138,9 +147,11 @@ export async function POST(req: NextRequest) {
       }))
     );
 
+    // Apple Pay, Google Pay y Link se gestionan desde Stripe Dashboard y dependen
+    // del dispositivo, navegador, país, moneda y dominio configurado en Stripe.
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
-      currency: settings.currency,
+      automatic_payment_methods: { enabled: true },
       line_items: lineItems,
       metadata: {
         items: itemsMeta,
@@ -159,6 +170,9 @@ export async function POST(req: NextRequest) {
         totalFinal: String(totalFinal),
         totalDeposit: String(totalDeposit),
         totalPending: String(totalPending),
+        privacyAccepted: String(parsed.privacyAccepted),
+        termsAccepted: String(parsed.termsAccepted),
+        acceptedAt,
       },
       customer_email: parsed.email,
       success_url: `${appUrl}/gracias?session_id={CHECKOUT_SESSION_ID}`,

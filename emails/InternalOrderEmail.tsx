@@ -30,6 +30,9 @@ export interface InternalOrderEmailProps {
   pendingAmount: number;
   notes?: string;
   stripeSessionId?: string;
+  privacyAccepted?: boolean;
+  termsAccepted?: boolean;
+  acceptedAt?: string;
 }
 
 const V = {
@@ -107,6 +110,9 @@ export function InternalOrderEmail({
   pendingAmount,
   notes,
   stripeSessionId,
+  privacyAccepted,
+  termsAccepted,
+  acceptedAt,
 }: InternalOrderEmailProps) {
   const isDelivery = !deliveryMethod || deliveryMethod === "delivery";
   const totalFinal = depositPaid + pendingAmount;
@@ -374,6 +380,28 @@ export function InternalOrderEmail({
                       >
                         {notes}
                       </p>
+                    </td>
+                  </tr>
+                </>
+              )}
+
+              {(privacyAccepted !== undefined || termsAccepted !== undefined || acceptedAt) && (
+                <>
+                  <tr>
+                    <td style={{ padding: "16px 28px 0 28px" }}>
+                      <Hr style={{ borderColor: V.border, margin: 0 }} />
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style={{ padding: "16px 28px 0 28px" }}>
+                      <BlockTitle>Aceptaciones legales</BlockTitle>
+                      <table width="100%" cellPadding={0} cellSpacing={0}>
+                        <tbody>
+                          <DataRow label="Política privacidad" value={privacyAccepted ? "Sí" : "No"} />
+                          <DataRow label="Condiciones compra" value={termsAccepted ? "Sí" : "No"} />
+                          {acceptedAt && <DataRow label="Fecha aceptación" value={acceptedAt} />}
+                        </tbody>
+                      </table>
                     </td>
                   </tr>
                 </>

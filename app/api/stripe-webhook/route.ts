@@ -78,6 +78,13 @@ export async function POST(req: NextRequest) {
     const postalCode = meta.postalCode ?? "";
     const deliveryZone = meta.deliveryZone ?? "";
 
+    const privacyAccepted = meta.privacyAccepted === "true";
+    const termsAccepted = meta.termsAccepted === "true";
+    const acceptedAt = meta.acceptedAt ?? "";
+    if (!privacyAccepted || !termsAccepted) {
+      console.warn("[stripe-webhook] Aceptaciones legales faltantes en sesión:", session.id);
+    }
+
     // Re-validate slot availability before saving
     let slotStillAvailable = false;
     try {
@@ -113,6 +120,9 @@ export async function POST(req: NextRequest) {
           deliveryDetails,
           postalCode,
           deliveryZone,
+          privacyAccepted,
+          termsAccepted,
+          acceptedAt,
         });
       }
 
@@ -154,6 +164,10 @@ export async function POST(req: NextRequest) {
           depositPaid: totalDeposit,
           pendingAmount: totalPending,
           notes: meta.notes,
+          stripeSessionId: session.id,
+          privacyAccepted,
+          termsAccepted,
+          acceptedAt,
           ...deliveryEmailFields,
         });
       } else {

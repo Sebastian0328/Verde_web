@@ -47,7 +47,7 @@ export default function ProductCard({
         </div>
         <div className="text-right shrink-0">
           <p className="font-bold text-verde-bosque text-base">
-            {product.finalPrice} €
+            {product.depositAmount || product.finalPrice} €
           </p>
           <p className="text-[10px] font-medium text-negro/30 uppercase tracking-wider mt-0.5">
             Pago online

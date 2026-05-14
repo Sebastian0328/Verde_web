@@ -75,7 +75,7 @@ export default function RootLayout({
                 </div>
               </div>
               <p className="text-crema/35 text-xs leading-relaxed text-right max-w-[200px]">
-                Bolones hechos bajo pedido para el fin de semana.
+                Recibe tu verde en el día que tu elijas.
               </p>
             </div>
             <p className="text-crema/20 text-[10px] uppercase tracking-widest">

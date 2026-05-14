@@ -57,21 +57,44 @@ export interface ProductRow {
   category: string;
 }
 
+// Handles "8", "8.00", "8,00", "€8", "8 €", "€8,00", "8.00€", etc.
+function parsePrice(value: string | undefined): number {
+  if (!value) return 0;
+  const cleaned = value
+    .trim()
+    .replace(/[€$£ \s]/g, "")  // strip currency symbols and spaces
+    .replace(",", ".");               // normalize European decimal separator
+  const n = parseFloat(cleaned);
+  return isNaN(n) ? 0 : n;
+}
+
 export async function getProductsRows(): Promise<ProductRow[]> {
   const rows = await getSheetValues("Products!A2:I");
   return rows
     .filter((r) => r.length >= 6)
-    .map((r) => ({
-      productId: r[0] ?? "",
-      name: r[1] ?? "",
-      description: r[2] ?? "",
-      finalPrice: parseFloat(r[3] ?? "0") || 0,
-      depositAmount: parseFloat(r[4] ?? "0") || 0,
-      available: (r[5] ?? "").toUpperCase() === "TRUE",
-      allergens: r[6] ? r[6].split(",").map((a) => a.trim()).filter(Boolean) : [],
-      imageUrl: r[7] ?? "",
-      category: r[8] ?? "",
-    }))
+    .map((r) => {
+      const finalPrice = parsePrice(r[3]);
+      // If depositAmount is empty/zero, fall back to finalPrice (full payment model)
+      const depositAmount = parsePrice(r[4]) || finalPrice;
+      const available = (r[5] ?? "").toUpperCase() === "TRUE";
+      if (available && (finalPrice === 0 || depositAmount === 0)) {
+        console.warn(
+          `[products] Price is zero for available product "${r[1]}" (id: ${r[0]}). ` +
+          `raw finalPrice="${r[3]}", raw depositAmount="${r[4]}"`
+        );
+      }
+      return {
+        productId: r[0] ?? "",
+        name: r[1] ?? "",
+        description: r[2] ?? "",
+        finalPrice,
+        depositAmount,
+        available,
+        allergens: r[6] ? r[6].split(",").map((a) => a.trim()).filter(Boolean) : [],
+        imageUrl: r[7] ?? "",
+        category: r[8] ?? "",
+      };
+    })
     .filter((p) => p.available);
 }
 
@@ -222,6 +245,10 @@ export interface OrderRow {
   postalCode: string;
   deliveryZone: string;
   deliveryMethod: string;
+  // Legal acceptance (columns U–W)
+  privacyAccepted: boolean;
+  termsAccepted: boolean;
+  acceptedAt: string;
 }
 
 export async function appendOrderToSheet(order: OrderRow): Promise<void> {
@@ -249,11 +276,15 @@ export async function appendOrderToSheet(order: OrderRow): Promise<void> {
     order.postalCode,
     order.deliveryZone,
     order.deliveryMethod,
+    // Legal acceptance — columns U, V, W
+    order.privacyAccepted ? "TRUE" : "FALSE",
+    order.termsAccepted ? "TRUE" : "FALSE",
+    order.acceptedAt,
   ];
 
   await sheets.spreadsheets.values.append({
     spreadsheetId: getSpreadsheetId(),
-    range: "Orders!A:T",
+    range: "Orders!A:W",
     valueInputOption: "USER_ENTERED",
     requestBody: { values: [row] },
   });

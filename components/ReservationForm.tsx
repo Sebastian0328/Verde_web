@@ -100,7 +100,7 @@ const CATEGORY_ORDER: NormalizedCategory[] = ["Verde", "Maduro", "Otros"];
 const CATEGORY_CONFIG: Record<NormalizedCategory, { title: string; subtitle: string }> = {
   Verde: {
     title: "VERDE Y SOLO VERDE",
-    subtitle: "Nuestros clásicos de verde, hechos bajo pedido.",
+    subtitle: "Herencia cultural y vínculo con la tierra.",
   },
   Maduro: {
     title: "PARA LOS AMANTES DEL MADURO",
@@ -217,6 +217,8 @@ export default function ReservationForm({
   const [fields, setFields] = useState<FormFields>(INITIAL_FIELDS);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [privacyAccepted, setPrivacyAccepted] = useState(false);
+  const [termsAccepted, setTermsAccepted] = useState(false);
   const [availability, setAvailability] = useState<DayAvailability[]>([]);
   const [loadingAvailability, setLoadingAvailability] = useState(true);
 
@@ -372,6 +374,11 @@ export default function ReservationForm({
       }
     }
 
+    if (!privacyAccepted || !termsAccepted) {
+      setError("Debes aceptar la política de privacidad y las condiciones para continuar.");
+      return;
+    }
+
     setLoading(true);
     try {
       const res = await fetch("/api/create-checkout-session", {
@@ -390,6 +397,8 @@ export default function ReservationForm({
           deliveryDetails: fields.deliveryDetails,
           postalCode: fields.postalCode,
           deliveryZone: fields.deliveryZone,
+          privacyAccepted,
+          termsAccepted,
         }),
       });
 
@@ -531,7 +540,7 @@ export default function ReservationForm({
             Tu pedido
           </p>
           <h2 className="text-verde-bosque text-3xl sm:text-4xl font-bold tracking-tight mb-3">
-            Reserva tus bolones
+            Pide tu verde
           </h2>
           <p className="text-negro/50 text-sm leading-relaxed">
             Añade uno o varios productos y paga online de forma segura.
@@ -1019,6 +1028,53 @@ export default function ReservationForm({
                   <span>Total a pagar hoy</span>
                   <span>{totalDeposit} €</span>
                 </div>
+              </div>
+
+              {/* ── Aceptación legal ── */}
+              <div className="space-y-3 mb-6 border border-negro/8 p-4 bg-negro/[0.02]">
+                <label className="flex items-start gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={privacyAccepted}
+                    onChange={(e) => { setPrivacyAccepted(e.target.checked); setError(null); }}
+                    className="mt-0.5 shrink-0 w-4 h-4 accent-verde-bosque cursor-pointer"
+                    aria-required="true"
+                  />
+                  <span className="text-xs text-negro/55 leading-relaxed">
+                    Acepto la{" "}
+                    <a
+                      href="/politica-privacidad"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="underline text-verde-bosque hover:text-verde-platano transition-colors"
+                    >
+                      Política de privacidad
+                    </a>{" "}
+                    y autorizo a VERDE a usar mis datos para gestionar mi pedido, la entrega y las comunicaciones necesarias.
+                  </span>
+                </label>
+
+                <label className="flex items-start gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={termsAccepted}
+                    onChange={(e) => { setTermsAccepted(e.target.checked); setError(null); }}
+                    className="mt-0.5 shrink-0 w-4 h-4 accent-verde-bosque cursor-pointer"
+                    aria-required="true"
+                  />
+                  <span className="text-xs text-negro/55 leading-relaxed">
+                    Acepto las{" "}
+                    <a
+                      href="/terminos"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="underline text-verde-bosque hover:text-verde-platano transition-colors"
+                    >
+                      condiciones de compra
+                    </a>
+                    , preparación y entrega del pedido.
+                  </span>
+                </label>
               </div>
 
               {error && (

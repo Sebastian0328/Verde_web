@@ -34,6 +34,9 @@ export interface ConfirmationEmailData {
   deliveryDetails?: string;
   postalCode?: string;
   deliveryZone?: string;
+  privacyAccepted?: boolean;
+  termsAccepted?: boolean;
+  acceptedAt?: string;
 }
 
 // ─── Customer confirmation ────────────────────────────────────────────────────
@@ -86,7 +89,10 @@ export async function sendInternalOrderNotification(
       depositPaid:     data.depositPaid,
       pendingAmount:   data.pendingAmount,
       notes:           data.notes,
-      stripeSessionId: data.stripeSessionId,
+      stripeSessionId:  data.stripeSessionId,
+      privacyAccepted:  data.privacyAccepted,
+      termsAccepted:    data.termsAccepted,
+      acceptedAt:       data.acceptedAt,
     }),
   });
 }

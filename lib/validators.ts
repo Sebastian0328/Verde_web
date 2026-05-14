@@ -26,6 +26,12 @@ export const reservationSchema = z.object({
   deliveryDetails: z.string().max(500).optional().or(z.literal("")),
   postalCode: z.string().max(20).optional().or(z.literal("")),
   deliveryZone: z.string().max(100).optional().or(z.literal("")),
+  privacyAccepted: z.literal(true, {
+    errorMap: () => ({ message: "Debes aceptar la política de privacidad." }),
+  }),
+  termsAccepted: z.literal(true, {
+    errorMap: () => ({ message: "Debes aceptar las condiciones de compra." }),
+  }),
 });
 
 export type ReservationInput = z.infer<typeof reservationSchema>;
