@@ -7,9 +7,9 @@ export default function HowItWorks() {
     },
     {
       number: "02",
-      title: "Paga 1 € de reserva",
+      title: "Paga online de forma segura",
       description:
-        "Confirmamos tu pedido con un abono de 1 €. El resto lo pagas cuando recibes tu pedido.",
+        "Paga el total del pedido online con Stripe. Confirmamos tu pedido de inmediato.",
     },
     {
       number: "03",

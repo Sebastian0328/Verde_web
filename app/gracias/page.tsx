@@ -60,7 +60,7 @@ export default async function GraciasPage({ searchParams }: GraciasPageProps) {
             Pedido confirmado
           </p>
           <h1 className="text-crema text-4xl sm:text-5xl font-bold tracking-tight leading-tight mb-6">
-            Reserva confirmada
+            Pedido confirmado
           </h1>
           <p className="text-crema/60 text-base leading-relaxed mb-3">
             Gracias{customerName ? `, ${customerName}` : ""}. Te enviamos un correo con los detalles de tu pedido.
@@ -104,15 +104,15 @@ export default async function GraciasPage({ searchParams }: GraciasPageProps) {
               {totalDeposit && (
                 <div className="flex justify-between items-baseline">
                   <span className="text-[10px] font-medium uppercase tracking-wider text-crema/32">
-                    Reserva pagada
+                    Total pagado
                   </span>
                   <span className="font-semibold text-oro text-sm">{totalDeposit} €</span>
                 </div>
               )}
-              {totalPending && (
+              {totalPending && parseFloat(totalPending) > 0 && (
                 <div className="flex justify-between items-baseline border-t border-crema/10 pt-3">
                   <span className="text-[10px] font-medium uppercase tracking-wider text-crema/32">
-                    Pendiente al recoger
+                    Pendiente
                   </span>
                   <span className="font-semibold text-crema text-sm">{totalPending} €</span>
                 </div>

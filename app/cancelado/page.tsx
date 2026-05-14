@@ -31,14 +31,14 @@ export default function CanceladoPage() {
         </p>
 
         <h1 className="text-crema text-4xl sm:text-5xl font-bold tracking-tight leading-tight mb-6">
-          Tu reserva quedó<br />en pausa
+          Tu pedido quedó<br />en pausa
         </h1>
 
         <p className="text-crema/65 text-base leading-relaxed mb-3">
           No se realizó ningún cargo.
         </p>
         <p className="text-crema/65 text-base leading-relaxed mb-14">
-          Puedes volver y terminar tu reserva cuando quieras.
+          Puedes volver y terminar tu pedido cuando quieras.
         </p>
 
         <div className="flex flex-col sm:flex-row gap-4 justify-center">
@@ -46,7 +46,7 @@ export default function CanceladoPage() {
             href="/#reservar"
             className="inline-block bg-crema text-verde-bosque text-[11px] font-semibold tracking-[0.22em] uppercase px-8 py-4 hover:bg-crema/90 transition-all duration-300 text-center"
           >
-            Volver a reservar
+            Volver a pedir
           </a>
           <a
             href="/"

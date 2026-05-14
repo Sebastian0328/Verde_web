@@ -123,7 +123,7 @@ export function CustomerReservationEmail({
     <Html lang="es">
       <Head />
       <Preview>
-        Reserva confirmada en Verde — {reservationDate} · {reservationTime}
+        Pedido confirmado en Verde — {reservationDate} · {reservationTime}
       </Preview>
       <Body
         style={{
@@ -183,7 +183,7 @@ export function CustomerReservationEmail({
                       padding: "5px 10px",
                     }}
                   >
-                    Confirmada
+                    Confirmado
                   </span>
                 </td>
               </tr>
@@ -221,8 +221,7 @@ export function CustomerReservationEmail({
                       lineHeight: "1.6",
                     }}
                   >
-                    Gracias por reservar en Verde. Ya tenemos tu pedido
-                    registrado y está confirmado.
+                    Gracias por pedir en Verde. Tu pedido ya quedó confirmado y pagado.
                   </p>
 
                   {/* ── Products ── */}
@@ -311,9 +310,10 @@ export function CustomerReservationEmail({
                   <SectionLabel>Pago</SectionLabel>
                   <table width="100%" cellPadding={0} cellSpacing={0}>
                     <tbody>
-                      <Row label="Total del pedido" value={`${totalFinal} €`} />
-                      <Row label="Reserva pagada hoy" value={`${depositPaid} €`} accent />
-                      <Row label="Pendiente al recoger" value={`${pendingAmount} €`} strong />
+                      <Row label="Total pagado" value={`${depositPaid} €`} strong />
+                      {pendingAmount > 0 && (
+                        <Row label="Pendiente" value={`${pendingAmount} €`} />
+                      )}
                     </tbody>
                   </table>
 

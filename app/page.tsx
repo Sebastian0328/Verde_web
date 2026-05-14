@@ -73,9 +73,7 @@ export default async function HomePage() {
           </p>
 
           <p className="animate-fade-in animation-delay-200 text-crema/70 text-sm mb-6">
-            Reserva con{" "}
-            <span className="font-semibold text-oro">1 €</span>
-            {" "}· se descuenta del precio final.
+            Haz tu pedido por reserva y paga online de forma segura.
           </p>
 
           <div className="animate-fade-in animation-delay-300 w-full">

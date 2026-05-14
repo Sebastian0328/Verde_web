@@ -115,7 +115,7 @@ export function InternalOrderEmail({
     <Html lang="es">
       <Head />
       <Preview>
-        Nueva reserva pagada — {customerName} · {reservationDate} {reservationTime}
+        Nuevo pedido pagado — {customerName} · {reservationDate} {reservationTime}
       </Preview>
       <Body
         style={{
@@ -156,7 +156,7 @@ export function InternalOrderEmail({
                       color: V.crema,
                     }}
                   >
-                    Nueva reserva pagada
+                    Nuevo pedido pagado
                   </p>
                 </td>
                 <td
@@ -185,7 +185,7 @@ export function InternalOrderEmail({
                       letterSpacing: "0.15em",
                     }}
                   >
-                    Abono recibido
+                    Total pagado
                   </p>
                 </td>
               </tr>
@@ -343,7 +343,7 @@ export function InternalOrderEmail({
                   <table width="100%" cellPadding={0} cellSpacing={0}>
                     <tbody>
                       <DataRow label="Total pedido" value={`${totalFinal} €`} />
-                      <DataRow label="Abono recibido" value={`${depositPaid} €`} />
+                      <DataRow label="Total pagado" value={`${depositPaid} €`} />
                       <DataRow label="Pendiente" value={`${pendingAmount} €`} />
                     </tbody>
                   </table>

@@ -534,9 +534,7 @@ export default function ReservationForm({
             Reserva tus bolones
           </h2>
           <p className="text-negro/50 text-sm leading-relaxed">
-            Añade uno o varios productos y paga{" "}
-            <span className="font-semibold text-tierra">1 € por unidad</span>{" "}
-            para confirmar. El resto lo abonás cuando recoges.
+            Añade uno o varios productos y paga online de forma segura.
           </p>
         </div>
 
@@ -604,7 +602,7 @@ export default function ReservationForm({
                     {cartProducts.length === 1 ? "producto" : "productos"}
                   </p>
                   <p className="text-sm font-semibold text-verde-bosque">
-                    Abono: {totalDeposit} €
+                    Total: {totalDeposit} €
                   </p>
                 </div>
 
@@ -1017,19 +1015,9 @@ export default function ReservationForm({
 
               {/* Totals */}
               <div className="space-y-2 border-t border-negro/10 pt-4 mb-8 text-sm">
-                <div className="flex justify-between text-negro/55">
-                  <span>Total del pedido</span>
-                  <span>{totalFinal} €</span>
-                </div>
-                <div className="flex justify-between text-negro/55">
-                  <span>Abono ahora ({totalItems} × 1 €)</span>
-                  <span className="font-semibold text-tierra">
-                    — {totalDeposit} €
-                  </span>
-                </div>
-                <div className="flex justify-between pt-2 border-t border-negro/10 font-semibold text-verde-bosque">
-                  <span>Pendiente al recoger</span>
-                  <span>{totalPending} €</span>
+                <div className="flex justify-between pt-2 font-semibold text-verde-bosque">
+                  <span>Total a pagar hoy</span>
+                  <span>{totalDeposit} €</span>
                 </div>
               </div>
 
@@ -1052,9 +1040,7 @@ export default function ReservationForm({
                 {loading && (
                   <span className="w-4 h-4 border border-crema/30 border-t-crema rounded-full animate-spin shrink-0" />
                 )}
-                {loading
-                  ? "Procesando..."
-                  : `Confirmar reserva — pagar ${totalDeposit > 0 ? totalDeposit : 1} €`}
+                {loading ? "Procesando..." : "Pagar y confirmar pedido"}
               </button>
 
               <p className="text-[10px] font-medium text-negro/25 uppercase tracking-wider mt-4 text-center">

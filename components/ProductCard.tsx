@@ -50,7 +50,7 @@ export default function ProductCard({
             {product.finalPrice} €
           </p>
           <p className="text-[10px] font-medium text-negro/30 uppercase tracking-wider mt-0.5">
-            reserva 1 €
+            Pago online
           </p>
         </div>
       </div>
