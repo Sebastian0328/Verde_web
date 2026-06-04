@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Arimo } from "next/font/google";
 import Image from "next/image";
+import { Analytics } from "@vercel/analytics/next";
 import "./globals.css";
 
 const arimo = Arimo({
@@ -83,6 +84,7 @@ export default function RootLayout({
             </p>
           </div>
         </footer>
+        <Analytics />
       </body>
     </html>
   );
