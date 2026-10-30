@@ -1,12 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { stripe } from "@/lib/stripe";
-import { appendOrderToSheet, findOrderByStripeSessionId } from "@/lib/google-sheets";
+import { appendOrderToSheet, findOrderByStripeSessionId, getProductsRows } from "@/lib/google-sheets";
 import {
   sendConfirmationToCustomer,
   sendInternalOrderNotification,
   sendOverbookingAlert,
 } from "@/lib/email";
 import { isSlotAvailable, normalizeTime, normalizeDate } from "@/lib/availability";
+import { orderCodeFromSession } from "@/lib/order-code";
+import { unirMeta } from "@/lib/stripe-meta";
+import { decodificarOrigen } from "@/lib/origen";
 import Stripe from "stripe";
 
 export const runtime = "nodejs";
@@ -50,6 +53,18 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Metadata vacía." }, { status: 400 });
     }
 
+    // Pagos que NO salen de esta web (enlace de pago de Stripe, cobro manual, otra app en la
+    // misma cuenta): llegan sin nuestra metadata. Antes se trataban como pedido y, al no
+    // tener fecha ni hora, disparaban un falso «URGENTE — Posible sobrecupo» con todo vacío
+    // y «NaN €». No son pedidos de la web: se ignoran (200, para que Stripe no reintente).
+    const esDeLaWeb =
+      meta.isAddon === "true" ||
+      Boolean(meta.items || meta.customerName || meta.reservationDate || meta.totalDeposit);
+    if (!esDeLaWeb) {
+      console.warn("[stripe-webhook] Pago ajeno a la web (sin metadata de pedido), ignorado:", session.id);
+      return NextResponse.json({ received: true, ignorado: "pago ajeno a la web" });
+    }
+
     // Dedup: skip if already processed
     try {
       const existing = await findOrderByStripeSessionId(session.id);
@@ -61,11 +76,24 @@ export async function POST(req: NextRequest) {
       console.error("[stripe-webhook] Error en dedup check:", err);
     }
 
+    // El carrito puede venir troceado en items/items2/items3… (ver
+    // lib/stripe-meta.ts). Las sesiones antiguas traen solo `items` y se leen
+    // igual, así que un pago iniciado antes del cambio se procesa sin problema.
     let items: ItemMeta[] = [];
+    const itemsCrudo = unirMeta(meta, "items");
     try {
-      items = JSON.parse(meta.items ?? "[]");
+      items = JSON.parse(itemsCrudo || "[]");
     } catch {
-      console.error("[stripe-webhook] Error parseando items:", session.id);
+      console.error(
+        "[stripe-webhook] Error parseando items:",
+        session.id,
+        `(${itemsCrudo.length} caracteres)`
+      );
+    }
+    if (items.length === 0) {
+      // Sin líneas no hay pedido que guardar: mejor gritar en los logs que
+      // escribir una fila vacía en Orders y que nadie se entere.
+      console.error("[stripe-webhook] Sesión SIN ítems legibles:", session.id);
     }
 
     const totalDeposit = Number(meta.totalDeposit);
@@ -77,10 +105,13 @@ export async function POST(req: NextRequest) {
     const deliveryDetails = meta.deliveryDetails ?? "";
     const postalCode = meta.postalCode ?? "";
     const deliveryZone = meta.deliveryZone ?? "";
+    const deliveryFee = Number(meta.deliveryFee ?? "0") || 0;
 
     const privacyAccepted = meta.privacyAccepted === "true";
     const termsAccepted = meta.termsAccepted === "true";
     const acceptedAt = meta.acceptedAt ?? "";
+    // De dónde vino el cliente (vacío en sesiones antiguas o sin origen).
+    const origen = decodificarOrigen(meta.origen);
     if (!privacyAccepted || !termsAccepted) {
       console.warn("[stripe-webhook] Aceptaciones legales faltantes en sesión:", session.id);
     }
@@ -93,14 +124,25 @@ export async function POST(req: NextRequest) {
     const subtotalBeforeDiscount = parseFloat(meta.subtotalBeforeDiscount ?? "0");
     const totalAfterDiscount = parseFloat(meta.totalAfterDiscount ?? "0");
 
+    // Las ampliaciones ("añadir a mi pedido") ya tienen cupo del pedido
+    // original → no se re-chequea disponibilidad.
+    const isAddon = meta.isAddon === "true";
+    // Pedido "en directo" (para hoy, ~40 min): no hay slot en Availability, así
+    // que se salta la re-validación y se marca PAID (si no, el terminal no lo vería).
+    const isDirecto = meta.directo === "true";
+
     // Re-validate slot availability before saving
     let slotStillAvailable = false;
-    try {
-      slotStillAvailable = await isSlotAvailable(reservationDate, reservationTime);
-    } catch (err) {
-      console.error("[stripe-webhook] Error validando slot:", err);
-      // benefit of the doubt: save as NEEDS_REVIEW
-      slotStillAvailable = false;
+    if (isAddon || isDirecto) {
+      slotStillAvailable = true;
+    } else {
+      try {
+        slotStillAvailable = await isSlotAvailable(reservationDate, reservationTime);
+      } catch (err) {
+        console.error("[stripe-webhook] Error validando slot:", err);
+        // benefit of the doubt: save as NEEDS_REVIEW
+        slotStillAvailable = false;
+      }
     }
 
     const orderStatus = slotStillAvailable ? "PAID" : "NEEDS_REVIEW";
@@ -137,15 +179,73 @@ export async function POST(req: NextRequest) {
           discountAmount,
           subtotalBeforeDiscount,
           totalAfterDiscount,
+          utmSource: origen.utmSource,
+          utmCampaign: origen.utmCampaign,
+          referrer: origen.referrer,
         });
+      }
+
+      // Línea de envío — para que la suma de Orders cuadre con el cobro de Stripe
+      if (deliveryFee > 0) {
+        await appendOrderToSheet({
+          createdAt: new Date().toISOString(),
+          status: orderStatus,
+          stripeSessionId: session.id,
+          customerName: meta.customerName,
+          email: meta.email,
+          phone: meta.phone,
+          productId: "envio-delivery",
+          productName: "Envío a domicilio",
+          quantity: 1,
+          reservationDate,
+          reservationTime,
+          notes: "",
+          finalPrice: deliveryFee,
+          depositPaid: deliveryFee,
+          pendingAmount: 0,
+          deliveryMethod,
+          deliveryAddress,
+          deliveryDetails,
+          postalCode,
+          deliveryZone,
+          privacyAccepted,
+          termsAccepted,
+          acceptedAt,
+          discountName: "",
+          discountType: "",
+          discountValue: 0,
+          discountAmount: 0,
+          subtotalBeforeDiscount: 0,
+          totalAfterDiscount: deliveryFee,
+          utmSource: origen.utmSource,
+          utmCampaign: origen.utmCampaign,
+          referrer: origen.referrer,
+        });
+      }
+
+      // Alérgenos por plato desde el Sheet, para mostrarlos en el email de
+      // confirmación. Con try/catch: si falla, el pedido/email sale igual.
+      let allergensById = new Map<string, string[]>();
+      try {
+        const productRows = await getProductsRows();
+        allergensById = new Map(
+          productRows.map((p) => [p.productId, p.allergens])
+        );
+      } catch (err) {
+        console.error("[stripe-webhook] No se pudieron cargar alérgenos:", err);
       }
 
       const emailItems = items.map((item) => ({
         productName: item.name,
         quantity: item.qty,
         finalPrice: item.price,
+        allergens: allergensById.get(item.id) ?? [],
       }));
 
+      // Los emails son best-effort: el pedido YA está guardado en el Sheet.
+      // Cada envío va en su propio try/catch para (1) que un fallo no tumbe al
+      // otro ni devuelva 500 (que dispararía reintentos de Stripe), y (2) dejar
+      // el error real de Resend en los logs para diagnóstico.
       if (slotStillAvailable) {
         const deliveryEmailFields = {
           deliveryMethod,
@@ -155,53 +255,77 @@ export async function POST(req: NextRequest) {
           deliveryZone,
         };
 
-        await sendConfirmationToCustomer({
-          customerName: meta.customerName,
-          email: meta.email,
-          phone: meta.phone,
-          items: emailItems,
-          reservationDate,
-          reservationTime,
-          depositPaid: totalDeposit,
-          pendingAmount: totalPending,
-          subtotalBeforeDiscount: promoApplied ? subtotalBeforeDiscount : undefined,
-          discountAmount: promoApplied ? discountAmount : undefined,
-          promoName: promoApplied ? promoName : undefined,
-          notes: meta.notes,
-          ...deliveryEmailFields,
-        });
+        try {
+          await sendConfirmationToCustomer({
+            customerName: meta.customerName,
+            email: meta.email,
+            phone: meta.phone,
+            orderCode: orderCodeFromSession(
+              isAddon && meta.parentSessionId ? meta.parentSessionId : session.id
+            ),
+            items: emailItems,
+            reservationDate,
+            reservationTime,
+            depositPaid: totalDeposit,
+            pendingAmount: totalPending,
+            subtotalBeforeDiscount: promoApplied ? subtotalBeforeDiscount : undefined,
+            discountAmount: promoApplied ? discountAmount : undefined,
+            promoName: promoApplied ? promoName : undefined,
+            notes: meta.notes,
+            ...deliveryEmailFields,
+          });
+        } catch (err) {
+          console.error(
+            `[stripe-webhook] FALLO email CLIENTE (to=${meta.email}) session=${session.id}:`,
+            err
+          );
+        }
 
-        await sendInternalOrderNotification({
-          customerName: meta.customerName,
-          email: meta.email,
-          phone: meta.phone,
-          items: emailItems,
-          reservationDate,
-          reservationTime,
-          depositPaid: totalDeposit,
-          pendingAmount: totalPending,
-          subtotalBeforeDiscount: promoApplied ? subtotalBeforeDiscount : undefined,
-          discountAmount: promoApplied ? discountAmount : undefined,
-          promoName: promoApplied ? promoName : undefined,
-          notes: meta.notes,
-          stripeSessionId: session.id,
-          privacyAccepted,
-          termsAccepted,
-          acceptedAt,
-          ...deliveryEmailFields,
-        });
+        try {
+          await sendInternalOrderNotification({
+            customerName: meta.customerName,
+            email: meta.email,
+            phone: meta.phone,
+            items: emailItems,
+            reservationDate,
+            reservationTime,
+            depositPaid: totalDeposit,
+            pendingAmount: totalPending,
+            subtotalBeforeDiscount: promoApplied ? subtotalBeforeDiscount : undefined,
+            discountAmount: promoApplied ? discountAmount : undefined,
+            promoName: promoApplied ? promoName : undefined,
+            notes: meta.notes,
+            stripeSessionId: session.id,
+            privacyAccepted,
+            termsAccepted,
+            acceptedAt,
+            ...deliveryEmailFields,
+          });
+        } catch (err) {
+          console.error(
+            `[stripe-webhook] FALLO email INTERNO (to=equipo) session=${session.id}:`,
+            err
+          );
+        }
       } else {
-        await sendOverbookingAlert({
-          customerName: meta.customerName,
-          email: meta.email,
-          phone: meta.phone,
-          items: emailItems,
-          reservationDate,
-          reservationTime,
-          stripeSessionId: session.id,
-          depositPaid: totalDeposit,
-          pendingAmount: totalPending,
-        });
+        try {
+          await sendOverbookingAlert({
+            customerName: meta.customerName,
+            email: meta.email,
+            phone: meta.phone,
+            items: emailItems,
+            reservationDate,
+            reservationTime,
+            stripeSessionId: session.id,
+            depositPaid: totalDeposit,
+            pendingAmount: totalPending,
+          });
+        } catch (err) {
+          console.error(
+            `[stripe-webhook] FALLO email OVERBOOKING session=${session.id}:`,
+            err
+          );
+        }
       }
     } catch (err) {
       console.error("[stripe-webhook] Error procesando pedido:", session.id, err);

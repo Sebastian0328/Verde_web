@@ -1,0 +1,28 @@
+/* Formulario del reparto. */
+.stage {
+  animation: rise 0.28s ease-out;
+}
+@keyframes rise {
+  from {
+    transform: translateY(6px);
+    opacity: 0.6;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stage {
+    animation: none;
+  }
+}
+
+/* Campo trampa para bots: fuera de la vista y del lector de pantalla. */
+.trap {
+  position: absolute;
+  left: -9999px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}

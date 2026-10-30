@@ -1,11 +1,48 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import type { Product } from "@/lib/products";
+import type { Product, NormalizedCategory } from "@/lib/products";
+import {
+  imageForProduct,
+  normalizeCategory,
+  mismoId,
+  vatRateOf,
+  DEFAULT_VAT_RATE,
+  agotadoParaFecha,
+  PRODUCT_CHOICES,
+} from "@/lib/products";
+import { vatBreakdown, formatCents, ratePercent } from "@/lib/vat";
+import { leerOrigen } from "@/lib/origen";
+import { platoDeclaraAlergeno, platoSinDetallar } from "@/lib/allergens";
 import type { StoreConfig } from "@/lib/store-config";
+import { PICKUP_ADDRESS, PICKUP_ENABLED, PICKUP_MAPS_URL } from "@/lib/store-config";
 import type { ActivePromotion } from "@/lib/promotions";
-import ProductCard from "./ProductCard";
+import type { WeekendOffer } from "@/lib/offers";
+import {
+  computeOfferDiscount,
+  productMatchesOffer,
+  offerBadgeLabel,
+  offerRuleText,
+  offerReservationText,
+} from "@/lib/offers";
+import {
+  quoteDeliveryByPostalCode,
+  minOrderForZone,
+  defaultMinOrder,
+} from "@/lib/delivery";
+import { todayMadrid, etaFromNow } from "@/lib/directo";
+import { formatDeliveryWindow, deliveryWindowSentence, DELIVERY_WINDOW_MIN } from "@/lib/delivery-window";
+import { estadoVentana, esMiercolesOJueves, VENTANA_LUNES } from "@/lib/ventana-lunes";
+import ProductCard, { type SizeOption } from "./ProductCard";
+import AccessGate from "./AccessGate";
+import DrinkUpsellModal from "./DrinkUpsellModal";
 import clsx from "clsx";
+
+interface DeliveryInfo {
+  deliverable: boolean;
+  zone: number | null;
+  fee: number;
+}
 
 interface TimeSlot {
   time: string;
@@ -24,6 +61,10 @@ interface ReservationFormProps {
   products: Product[];
   config: StoreConfig;
   promotion?: ActivePromotion | null;
+  weekendOffer?: WeekendOffer | null;
+  requireAccessCode?: boolean;
+  accessCodeValue?: string;
+  directoAvailable?: boolean; // el piloto "pedir hoy en directo" está abierto ahora
 }
 
 interface FormFields {
@@ -53,6 +94,24 @@ const INITIAL_FIELDS: FormFields = {
   postalCode: "",
   deliveryZone: "",
 };
+
+// Los 14 alérgenos de declaración obligatoria (Reglamento UE 1169/2011).
+const ALLERGENS = [
+  "Gluten",
+  "Crustáceos",
+  "Huevos",
+  "Pescado",
+  "Cacahuetes",
+  "Soja",
+  "Lácteos",
+  "Frutos de cáscara",
+  "Apio",
+  "Mostaza",
+  "Sésamo",
+  "Sulfitos",
+  "Altramuces",
+  "Moluscos",
+] as const;
 
 const STORAGE_KEY = "verde_customer_data";
 
@@ -88,20 +147,64 @@ function formatDateLabel(dateStr: string): string {
 
 const DAY_LABELS = ["L", "M", "X", "J", "V", "S", "D"];
 
-// ─── Category helpers ───────────────────────────────────────────────────────
+/**
+ * Desplazamiento suave a prueba de saltos de layout.
+ *
+ * Al cambiar de paso, el anterior se colapsa y la página encoge de golpe (la
+ * carta entera desaparece). Si el scroll sale antes de que el layout se asiente,
+ * el navegador persigue una posición que ya no existe y acaba al final. Por eso:
+ * esperar a que se pinte, ir, y corregir una vez más cuando GSAP ha recalculado.
+ *
+ * `getEl` se evalúa en CADA intento, nunca antes: el destino puede no estar
+ * montado todavía en el momento de la llamada.
+ */
+function scrollSuaveA(
+  getEl: () => HTMLElement | null,
+  block: ScrollLogicalPosition = "start"
+) {
+  const ir = (): boolean => {
+    const el = getEl();
+    if (!el) return false;
+    el.scrollIntoView({ behavior: "smooth", block });
+    return true;
+  };
 
-type NormalizedCategory = "Verde" | "Maduro" | "Otros";
-
-function normalizeCategory(raw: string): NormalizedCategory {
-  const lower = (raw ?? "").trim().toLowerCase();
-  if (lower === "verde") return "Verde";
-  if (lower === "maduro") return "Maduro";
-  return "Otros";
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => {
+      if (!ir()) setTimeout(ir, 90); // aún no montado → un reintento
+      setTimeout(() => {
+        const el = getEl();
+        if (!el) return;
+        const top = el.getBoundingClientRect().top;
+        const desviado =
+          block === "center"
+            ? Math.abs(top - window.innerHeight / 2) > 140
+            : Math.abs(top) > 90;
+        if (desviado) ir();
+      }, 380);
+    })
+  );
 }
 
-const CATEGORY_ORDER: NormalizedCategory[] = ["Verde", "Maduro", "Otros"];
+// ─── Category helpers ───────────────────────────────────────────────────────
+
+// Precio en formato español: entero "10", decimal "2,20".
+function fmtPrice(n: number): string {
+  return Number.isInteger(n) ? String(n) : n.toFixed(2).replace(".", ",");
+}
+
+// El vocabulario de categorías vive en lib/products.ts: es el mismo que usa la
+// inyección de productos desde código, así que un plato añadido allí cae en el
+// bloque que toca. Tenerlo duplicado aquí era invitar a que se desincronizara.
+// "Menu" queda fuera a propósito: el menú de la semana no tiene sección en la
+// carta — vive como card destacada en el bloque de Packs de la home (02-09).
+const CATEGORY_ORDER: NormalizedCategory[] = ["Verde", "Maduro", "Pesca", "Otros", "Bebidas"];
 
 const CATEGORY_CONFIG: Record<NormalizedCategory, { title: string; subtitle: string }> = {
+  Menu: {
+    title: "MENÚ DE LA SEMANA",
+    subtitle: "Plato, acompañante y bebida a precio cerrado. Cambia cada semana.",
+  },
   Verde: {
     title: "VERDE Y SOLO VERDE",
     subtitle: "Herencia cultural y vínculo con la tierra.",
@@ -110,11 +213,47 @@ const CATEGORY_CONFIG: Record<NormalizedCategory, { title: string; subtitle: str
     title: "PARA LOS AMANTES DEL MADURO",
     subtitle: "Una versión más dulce, intensa y contundente.",
   },
+  Pesca: {
+    title: "PESCA DEL DÍA",
+    subtitle: "Pesca fresca del día, del mar al verde.",
+  },
   Otros: {
     title: "OTROS PRODUCTOS",
     subtitle: "Más opciones disponibles por reserva.",
   },
+  Bebidas: {
+    title: "BEBIDAS",
+    subtitle: "Para acompañar y refrescar.",
+  },
 };
+
+// ─── Variantes de tamaño ─────────────────────────────────────────────────────
+// Un producto "base" con opciones de tamaño que en realidad son otros productos
+// de la carta (mismo id/precio del Sheet). La variante NO se muestra como card
+// propia: aparece como selector dentro de la card del base (p.ej. media ración).
+const SIZE_VARIANT_GROUPS: { baseId: string; options: { label: string; id: string }[] }[] = [
+  {
+    baseId: "tigrillo-mixto",
+    options: [
+      { label: "Entera", id: "tigrillo-mixto" },
+      { label: "Media", id: "tigrillo-media-racion" },
+    ],
+  },
+];
+
+// ─── Extras de plato ─────────────────────────────────────────────────────────
+// Productos que se ofrecen como "extra" dentro de la card de otro plato (no como
+// card propia en la carta). Cada extra es un producto real del Sheet (mismo
+// id/precio). P.ej. el reahogado solo pega con el corviche.
+const PRODUCT_ADDONS: { baseId: string; addons: { label: string; id: string }[] }[] = [
+  {
+    baseId: "corviche-de-pescado",
+    addons: [{ label: "Reahogado de pescado", id: "Reahogado-de-pescado" }],
+  },
+];
+
+// Las elecciones incluidas (bebida del menú, etc.) viven en lib/products.ts
+// (PRODUCT_CHOICES): las comparte la card del bloque de packs.
 
 // ─── StepSection ───────────────────────────────────────────────────────────
 // Renders a step row: collapsed summary when not active, full content when active.
@@ -128,6 +267,8 @@ interface StepSectionProps {
   summary: string;
   onEdit: () => void;
   showEditButton?: boolean;
+  editLabel?: string;
+  editProminent?: boolean;
   children: React.ReactNode;
 }
 
@@ -140,36 +281,20 @@ function StepSection({
   summary,
   onEdit,
   showEditButton = true,
+  editLabel = "Cambiar",
+  editProminent = false,
   children,
 }: StepSectionProps) {
   return (
-    <div ref={stepRef} className="border-b border-negro/8 scroll-mt-24">
+    <div ref={stepRef} className="border-t border-negro/8 pt-8 mt-8 scroll-mt-24">
       {/* Header row */}
       <div className="flex items-center justify-between py-5">
         <div className="flex items-center gap-3 min-w-0">
-          <span
-            className={clsx(
-              "w-6 h-6 shrink-0 flex items-center justify-center text-[10px] font-bold transition-all duration-200",
-              isDone
-                ? "bg-verde-bosque text-crema"
-                : isActive
-                  ? "border border-verde-bosque text-verde-bosque"
-                  : "border border-negro/20 text-negro/30"
-            )}
-          >
+          <span className="bg-verde-bosque text-crema rounded-full w-7 h-7 shrink-0 flex items-center justify-center text-xs font-bold">
             {isDone ? "✓" : number}
           </span>
 
-          <span
-            className={clsx(
-              "text-[11px] font-semibold uppercase tracking-[0.2em] shrink-0",
-              isActive
-                ? "text-verde-bosque"
-                : isDone
-                  ? "text-negro/55"
-                  : "text-negro/35"
-            )}
-          >
+          <span className="text-verde-bosque font-semibold text-base shrink-0">
             {title}
           </span>
 
@@ -185,9 +310,13 @@ function StepSection({
           <button
             type="button"
             onClick={onEdit}
-            className="ml-4 shrink-0 text-[10px] font-semibold uppercase tracking-[0.15em] text-verde-bosque/60 hover:text-verde-bosque transition-colors duration-150 border-b border-verde-bosque/20 hover:border-verde-bosque pb-px"
+            className={
+              editProminent
+                ? "ml-4 shrink-0 text-[10px] font-semibold uppercase tracking-[0.15em] text-crema bg-verde-bosque hover:bg-verde-platano transition-colors duration-150 rounded-full px-3 py-1.5"
+                : "ml-4 shrink-0 text-[10px] font-semibold uppercase tracking-[0.15em] text-verde-bosque/60 hover:text-verde-bosque transition-colors duration-150 border-b border-verde-bosque/20 hover:border-verde-bosque pb-px"
+            }
           >
-            Cambiar
+            {editLabel}
           </button>
         )}
       </div>
@@ -215,10 +344,90 @@ export default function ReservationForm({
   products,
   config,
   promotion,
+  weekendOffer = null,
+  requireAccessCode = false,
+  accessCodeValue = "",
+  directoAvailable = false,
 }: ReservationFormProps) {
   const [currentStep, setCurrentStep] = useState(1);
   const [maxStep, setMaxStep] = useState(1);
   const [cart, setCart] = useState<Record<string, number>>({});
+  // Popup "Completa tu pedido" (bebidas + salsas + cubiertos), una vez por sesión.
+  const [showDrinkModal, setShowDrinkModal] = useState(false);
+  const [drinkModalSeen, setDrinkModalSeen] = useState(false);
+  // El popup también se reabre como "rescate" si el pedido a domicilio no
+  // llega al mínimo (aunque ya se haya visto una vez). Guarda desde dónde se
+  // reabrió para volver al sitio correcto al cerrarlo.
+  const [rescueOrigin, setRescueOrigin] = useState<null | "menu" | "entrega">(null);
+  const [cutlery, setCutlery] = useState(false);
+  // Elecciones incluidas por producto (id → opción elegida). Sin entrada =
+  // primera opción del PRODUCT_CHOICES correspondiente.
+  const [choices, setChoices] = useState<Record<string, string>>({});
+  const [allergens, setAllergens] = useState<string[]>([]);
+  const toggleAllergen = (a: string) =>
+    setAllergens((prev) =>
+      prev.includes(a) ? prev.filter((x) => x !== a) : [...prev, a]
+    );
+
+  // El cliente elige: "hoy" (en directo, ~40 min) u "otro" día (reserva normal).
+  // Solo hay elección si el directo está abierto ahora; si no, siempre reserva.
+  const [orderMode, setOrderMode] = useState<"hoy" | "otro">("hoy");
+  const isDirecto = directoAvailable && orderMode === "hoy";
+
+  // En directo (para hoy): pre-fija hoy + ahora+40 (así se saltan los pasos de
+  // día/hora); la hora se recalcula al pagar. Al cambiar a "otro día", limpia
+  // esa fecha/hora auto para que el cliente elija en el calendario.
+  useEffect(() => {
+    if (isDirecto) {
+      setFields((prev) => ({
+        ...prev,
+        reservationDate: todayMadrid(),
+        reservationTime: etaFromNow(),
+      }));
+    } else if (directoAvailable) {
+      setFields((prev) => ({ ...prev, reservationDate: "", reservationTime: "" }));
+    }
+  }, [isDirecto, directoAvailable]);
+  useEffect(() => {
+    function onAddPack(e: Event) {
+      const { items, choice } = (e as CustomEvent<{
+        items: { id: string; qty: number }[];
+        choice?: { productId: string; value: string };
+      }>).detail;
+      setCart(prev => {
+        const next = {...prev};
+        items.forEach(({id, qty}) => { next[id] = (next[id] ?? 0) + qty; });
+        return next;
+      });
+      // La bebida elegida en la tarjeta del menú llega con el evento.
+      if (choice) {
+        setChoices((prev) => ({ ...prev, [choice.productId]: choice.value }));
+      }
+      // Llevar al formulario pero SIN colapsar la carta, por si quiere añadir más
+      goToStep(1);
+    }
+    window.addEventListener('verde:add-pack', onAddPack);
+    return () => window.removeEventListener('verde:add-pack', onAddPack);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Coste de envío calculado en el comprobador de zonas → se sincroniza aquí
+  useEffect(() => {
+    function onDelivery(e: Event) {
+      const d = (e as CustomEvent<DeliveryInfo & { address?: string; postalCode?: string }>).detail;
+      setDelivery({ deliverable: d.deliverable, zone: d.zone, fee: d.fee });
+      setDeliveryError(null);
+      setFields((prev) => ({
+        ...prev,
+        deliveryAddress:
+          d.address && !prev.deliveryAddress ? d.address : prev.deliveryAddress,
+        postalCode:
+          d.postalCode && !prev.postalCode ? d.postalCode : prev.postalCode,
+      }));
+    }
+    window.addEventListener('verde:delivery:update', onDelivery);
+    return () => window.removeEventListener('verde:delivery:update', onDelivery);
+  }, []);
   const [fields, setFields] = useState<FormFields>(INITIAL_FIELDS);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -230,6 +439,46 @@ export default function ReservationForm({
   const [savedDataDetected, setSavedDataDetected] = useState(false);
   const [livePromotion, setLivePromotion] = useState<ActivePromotion | null>(promotion ?? null);
 
+  // Ventana del Lunes: tic de 1 s para que el descuento estimado aparezca y
+  // desaparezca EN VIVO con la ventana (el banner ya cuenta atrás; esto mueve
+  // los totales). Estimación visual — el servidor recalcula al pagar.
+  const [ventanaLive, setVentanaLive] = useState(false);
+  useEffect(() => {
+    const tick = () => setVentanaLive(estadoVentana().live);
+    tick();
+    const t = setInterval(tick, 1000);
+    return () => clearInterval(t);
+  }, []);
+  const [delivery, setDelivery] = useState<DeliveryInfo | null>(null);
+  const [deliveryError, setDeliveryError] = useState<string | null>(null);
+  const [accessCode, setAccessCode] = useState("");
+  const [unlocked, setUnlocked] = useState(!requireAccessCode);
+
+  // Recordar desbloqueo entre recargas + escuchar el gate de arriba (banner)
+  useEffect(() => {
+    if (!requireAccessCode) return;
+    if (typeof window === "undefined") return;
+    function applyUnlock() {
+      const saved = localStorage.getItem("verde_access_code") ?? "";
+      setAccessCode(saved);
+      setUnlocked(true);
+    }
+    if (localStorage.getItem("verde_access_unlocked") === "1") applyUnlock();
+    window.addEventListener("verde:access:unlocked", applyUnlock);
+    return () =>
+      window.removeEventListener("verde:access:unlocked", applyUnlock);
+  }, [requireAccessCode]);
+
+  function handleUnlock() {
+    const clean = accessCodeValue.replace(/\s+/g, "");
+    setAccessCode(clean);
+    setUnlocked(true);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("verde_access_unlocked", "1");
+      localStorage.setItem("verde_access_code", clean);
+    }
+  }
+
   // Individual refs — hooks cannot be in arrays
   const ref1 = useRef<HTMLDivElement>(null);
   const ref2 = useRef<HTMLDivElement>(null);
@@ -237,6 +486,8 @@ export default function ReservationForm({
   const ref4 = useRef<HTMLDivElement>(null);
   const ref5 = useRef<HTMLDivElement>(null);
   const ref6 = useRef<HTMLDivElement>(null);
+  // Panel "Tu selección" — destino del carrito flotante.
+  const seleccionRef = useRef<HTMLDivElement>(null);
   const stepRefs = [ref1, ref2, ref3, ref4, ref5, ref6];
 
   useEffect(() => {
@@ -263,7 +514,7 @@ export default function ReservationForm({
         deliveryDetails: saved.deliveryDetails || prev.deliveryDetails,
         postalCode: saved.postalCode || prev.postalCode,
         deliveryZone: saved.deliveryZone || prev.deliveryZone,
-        deliveryMethod: saved.deliveryMethod || prev.deliveryMethod,
+        deliveryMethod: PICKUP_ENABLED ? saved.deliveryMethod || prev.deliveryMethod : "delivery",
       }));
     } catch {
       // ignore malformed stored data
@@ -285,15 +536,20 @@ export default function ReservationForm({
       .catch(() => {});
   }, []);
 
-  function goToStep(step: number) {
+  // Cambia de paso. Con `scroll: false` NO se desplaza: es para quien va a
+  // llevar la vista a otro sitio (p. ej. al panel del carrito). Si ambos
+  // desplazamientos salen a la vez se pisan, y ganaba este — que sube arriba.
+  function goToStep(step: number, opts: { scroll?: boolean } = {}) {
+    // Candado del pedido mínimo: por debajo no se avanza a NINGÚN paso (ni a
+    // elegir el día) — se rebota al carrito, donde el aviso vivo del mínimo
+    // ya está a la vista. Todos los "Continuar" pasan por aquí.
+    if (step > 1 && faltaParaEmpezar() > 0) {
+      step = 1;
+    }
     setCurrentStep(step);
     setMaxStep((prev) => Math.max(prev, step));
-    setTimeout(() => {
-      stepRefs[step - 1]?.current?.scrollIntoView({
-        behavior: "smooth",
-        block: "start",
-      });
-    }, 60);
+    if (opts.scroll === false) return;
+    scrollSuaveA(() => stepRefs[step - 1]?.current ?? null);
   }
 
   // ── Cart ──
@@ -323,6 +579,95 @@ export default function ReservationForm({
     });
   }
 
+  function removeItem(productId: string) {
+    setCart((prev) => {
+      const { [productId]: _, ...rest } = prev;
+      return rest;
+    });
+  }
+
+  // Calcula el envío desde el código postal (tabla CP → zona, sin geocoding).
+  // La misma tabla vive en el servidor: lo que se enseña aquí es lo que se cobra.
+  function calcDelivery(): DeliveryInfo | null {
+    const cp = fields.postalCode.match(/\b\d{5}\b/)?.[0];
+    if (!cp) {
+      setDeliveryError("Introduce tu código postal para calcular el envío.");
+      setDelivery(null);
+      return null;
+    }
+    const quote = quoteDeliveryByPostalCode(cp);
+    if (!quote.deliverable) {
+      const d = { deliverable: false, zone: null, fee: 0 };
+      setDelivery(d);
+      setDeliveryError(
+        "Ahora mismo no llegamos a tu código postal (repartimos hasta 12 km de la cocina). " +
+          (PICKUP_ENABLED
+            ? "Puedes elegir recogida en local o escribirnos por WhatsApp."
+            : "Escríbenos por WhatsApp y lo vemos.")
+      );
+      return d;
+    }
+    const d = { deliverable: true, zone: quote.zone, fee: quote.fee };
+    setDelivery(d);
+    setDeliveryError(null);
+    return d;
+  }
+
+  // Pedido mínimo de la zona: cuánto falta de comida (sin envío) para llegar.
+  function faltaParaMinimo(zone: number | null): number {
+    const min = minOrderForZone(zone);
+    return Math.max(0, min - totalDeposit);
+  }
+
+  function mensajeMinimo(zone: number | null): string {
+    const min = minOrderForZone(zone);
+    const falta = faltaParaMinimo(zone).toFixed(2).replace(".", ",");
+    return (
+      `Pedido mínimo a domicilio en tu zona: ${min} € (sin contar el envío). ` +
+      `Te faltan ${falta} € — ¿añades una salsa o una bebida?`
+    );
+  }
+
+  // Mínimo para EMPEZAR el pedido (candado del carrito y del calendario):
+  // aún no se conoce la zona, así que usa el mínimo por defecto. Quien tiene
+  // "Recogida" guardada de otra compra no tiene mínimo.
+  function faltaParaEmpezar(): number {
+    if (fields.deliveryMethod === "pickup") return 0;
+    return Math.max(0, defaultMinOrder() - totalDeposit);
+  }
+
+  function mensajeMinimoGlobal(): string {
+    const falta = faltaParaEmpezar().toFixed(2).replace(".", ",");
+    return (
+      `Pedido mínimo a domicilio: ${defaultMinOrder()} € (sin contar el envío). ` +
+      `Te faltan ${falta} € — añade una salsa o una bebida para continuar.`
+    );
+  }
+
+  // Avanzar al pago: si es entrega y no se ha calculado el envío, se calcula
+  // automáticamente aquí (el cliente no tiene que pulsar "Calcular envío").
+  function continueFromDelivery() {
+    if (fields.deliveryMethod === "pickup") {
+      goToStep(6);
+      return;
+    }
+    const d = delivery?.deliverable ? delivery : calcDelivery();
+    if (!d?.deliverable) return;
+    // Si no es entregable, calcDelivery ya muestra el aviso y NO avanzamos
+    // (debe ajustar la dirección o elegir recogida).
+    if (faltaParaMinimo(d.zone) > 0) {
+      setDeliveryError(mensajeMinimo(d.zone));
+      // Rescate: se reabre el popup de salsas/bebidas con el aviso del mínimo
+      // para que añada ahí mismo (aunque ya lo hubiera visto una vez).
+      if (drinkProducts.length > 0 || salsaProducts.length > 0) {
+        setRescueOrigin("entrega");
+        setShowDrinkModal(true);
+      }
+      return;
+    }
+    goToStep(6);
+  }
+
   // ── Fields ──
 
   function handleFieldChange(
@@ -330,9 +675,20 @@ export default function ReservationForm({
   ) {
     setFields((prev) => ({ ...prev, [e.target.name]: e.target.value }));
     setError(null);
+    // Si cambian la dirección o el CP, invalidar el cálculo de envío anterior
+    // para obligar a recalcular (no se puede pagar con un envío sin recalcular).
+    if (e.target.name === "deliveryAddress" || e.target.name === "postalCode") {
+      setDelivery(null);
+    }
   }
 
   function selectDate(date: string) {
+    // Por debajo del mínimo tampoco se puede elegir día (el calendario puede
+    // seguir montado si el cliente quitó productos después de avanzar).
+    if (faltaParaEmpezar() > 0) {
+      goToStep(1);
+      return;
+    }
     // Clearing time — slots are specific to each date
     setFields((prev) => ({ ...prev, reservationDate: date, reservationTime: "" }));
     setError(null);
@@ -366,6 +722,100 @@ export default function ReservationForm({
   const selectedDay = availability.find((d) => d.date === fields.reservationDate);
 
   const cartProducts = products.filter((p) => (cart[p.id] ?? 0) > 0);
+
+  // Choque entre las alergias marcadas por el cliente y los platos del carrito.
+  // (Los toggles del checkout y la columna G del Sheet usan el mismo vocabulario.)
+  // La comparación pasa por lib/allergens.ts: la carta escribe "Maní" y el
+  // cliente marca "Cacahuetes", y en crudo no casaban (ver el fichero).
+  const allergenConflicts = allergens
+    .map((a) => ({
+      allergen: a,
+      dishes: cartProducts
+        .filter((p) => platoDeclaraAlergeno(p.allergens, a))
+        .map((p) => p.name),
+    }))
+    .filter((c) => c.dishes.length > 0);
+
+  // Platos del carrito sin alérgenos detallados ("Consultar"). Solo importan si
+  // el cliente ha marcado alguna alergia: no se le puede decir que son seguros.
+  const dishesSinDetallar =
+    allergens.length > 0
+      ? cartProducts.filter((p) => platoSinDetallar(p.allergens)).map((p) => p.name)
+      : [];
+
+  // Bebidas (para decidir si se ofrece el popup "Completa tu pedido").
+  // Los agotados se quedan fuera del popup: en la carta se ven con su cartel,
+  // pero ofrecerlos como upsell sería invitar a algo que no se puede comprar.
+  const drinkProducts = products.filter(
+    (p) =>
+      !p.isPack &&
+      p.available !== false &&
+      normalizeCategory(p.category ?? "") === "Bebidas"
+  );
+  const salsaProducts = products.filter(
+    (p) =>
+      !p.isPack &&
+      p.available !== false &&
+      (p.category ?? "").trim().toLowerCase() === "salsas"
+  );
+
+  // Popup "Completa tu pedido" (bebidas + salsas + cubiertos): se ofrece una vez
+  // al ir a pagar si hay productos en el carrito y hay algún extra que ofrecer.
+  // Se dispara al pulsar "Continuar con la fecha" o al abrir el banner del carrito.
+  const canOfferDrinks =
+    cartProducts.length > 0 &&
+    !drinkModalSeen &&
+    (drinkProducts.length > 0 || salsaProducts.length > 0);
+
+  function continueFromMenu() {
+    // Por debajo del mínimo, el popup de extras hace de rescate (aunque ya se
+    // hubiera visto): que completen ahí mismo. Si no hay extras que ofrecer,
+    // goToStep aplica el candado y muestra el aviso.
+    if (
+      faltaParaEmpezar() > 0 &&
+      (drinkProducts.length > 0 || salsaProducts.length > 0)
+    ) {
+      setRescueOrigin("menu");
+      setShowDrinkModal(true);
+      return;
+    }
+    if (canOfferDrinks) {
+      setShowDrinkModal(true);
+      return;
+    }
+    // En directo no hay pasos de día/hora → directo a "Tus datos".
+    goToStep(isDirecto ? 4 : 2);
+  }
+
+  function dismissDrinkModal() {
+    setDrinkModalSeen(true);
+    setShowDrinkModal(false);
+    // Rescate desde el paso de entrega: si ya llega al mínimo de su zona,
+    // directo al pago; si sigue corto, al paso de entrega con el aviso (NO se
+    // reabre el popup otra vez — sería un bucle molesto).
+    if (rescueOrigin === "entrega") {
+      setRescueOrigin(null);
+      if (
+        fields.deliveryMethod !== "delivery" ||
+        faltaParaMinimo(delivery?.zone ?? null) <= 0
+      ) {
+        goToStep(6);
+      } else {
+        goToStep(5);
+      }
+      return;
+    }
+    setRescueOrigin(null);
+    // Tras cerrar, avanzar al primer paso pendiente (nunca hacia atrás).
+    // goToStep aplica el candado del mínimo: si sigue corto, se queda en el
+    // carrito con el aviso en vez de avanzar.
+    if (!step2Done) goToStep(2);
+    else if (!step3Done) goToStep(3);
+    else if (!step4Done) goToStep(4);
+    else if (!step5Done) goToStep(5);
+    else goToStep(6);
+  }
+
   const totalItems = cartProducts.reduce((s, p) => s + (cart[p.id] ?? 0), 0);
   const totalDeposit = cartProducts.reduce(
     (s, p) => s + p.depositAmount * (cart[p.id] ?? 0),
@@ -377,14 +827,80 @@ export default function ReservationForm({
   );
   const totalPending = totalFinal - totalDeposit;
 
+  // Aviso de pedido mínimo en el popup de extras. Si aún no hay zona
+  // calculada se usa el mínimo por defecto (en Fase 1 es el de todas las
+  // zonas). Solo aplica a domicilio; en recogida no hay mínimo.
+  const minPedidoAviso = delivery?.zone
+    ? minOrderForZone(delivery.zone)
+    : defaultMinOrder();
+  const faltaMinimoAviso =
+    fields.deliveryMethod === "delivery"
+      ? Math.max(0, minPedidoAviso - totalDeposit)
+      : 0;
+
   // Discount — visual estimate only; backend is always source of truth
   const subtotalCents = Math.round(totalDeposit * 100);
+  // Misma regla que el servidor: la promo del Sheet y la Ventana del Lunes
+  // COMPITEN y gana la mayor — nunca se suman. La ventana solo cuenta si está
+  // abierta ahora y la entrega elegida cae en miércoles o jueves.
+  const ventanaCuentaAqui =
+    ventanaLive && esMiercolesOJueves(fields.reservationDate);
+  const pctSheet = livePromotion?.isActive ? livePromotion.promoValue : 0;
+  const pctVentana = ventanaCuentaAqui ? VENTANA_LUNES.porcentaje : 0;
+  const promoAplicada =
+    pctVentana > pctSheet
+      ? { nombre: VENTANA_LUNES.nombre, pct: pctVentana }
+      : pctSheet > 0
+      ? { nombre: livePromotion!.promoName, pct: pctSheet }
+      : null;
   const discountCents =
-    livePromotion?.isActive && totalDeposit > 0
-      ? Math.round(subtotalCents * livePromotion.promoValue / 100)
+    promoAplicada && totalDeposit > 0
+      ? Math.round(subtotalCents * promoAplicada.pct / 100)
       : 0;
   const discountAmount = discountCents / 100;
-  const totalAfterDiscount = (subtotalCents - discountCents) / 100;
+
+  // Oferta de fin de semana (Sweet Weekend) — estimación visual; el servidor
+  // recalcula el importe real en el checkout.
+  const offerResult =
+    weekendOffer
+      ? computeOfferDiscount(
+          weekendOffer,
+          cartProducts.map((p) => ({
+            productId: p.id,
+            productName: p.name,
+            quantity: cart[p.id] ?? 0,
+            unitPrice: p.depositAmount,
+          })),
+          isDirecto ? todayMadrid() : fields.reservationDate
+        )
+      : { discountAmount: 0, discountedUnits: 0 };
+  const offerDiscount = offerResult.discountAmount;
+
+  // Descuento combinado (promo global + oferta finde), nunca mayor que el subtotal.
+  const combinedDiscount = Math.min(totalDeposit, discountAmount + offerDiscount);
+  const totalAfterDiscount = totalDeposit - combinedDiscount;
+
+  // Envío — solo aplica con método "delivery" y zona cubierta
+  const effectiveDeliveryFee =
+    fields.deliveryMethod === "delivery" && delivery?.deliverable ? delivery.fee : 0;
+  const grandTotal = totalAfterDiscount + effectiveDeliveryFee;
+
+  // IVA informativo: NO cambia el total. El precio ya lo incluye; aquí solo se
+  // desglosa. Hoy toda la carta va al mismo tipo, así que se calcula sobre el
+  // total realmente cobrado (base+vat === total, al céntimo). Si algún día hay
+  // varios tipos en el carrito, se listará una línea por tipo.
+  const tiposIva = new Set(cartProducts.map((p) => vatRateOf(p)));
+  const tipoIva = tiposIva.size === 1 ? [...tiposIva][0] : DEFAULT_VAT_RATE;
+  const ivaGroups = vatBreakdown([
+    { gross: Math.round(grandTotal * 100), rate: tipoIva },
+  ]).groups;
+
+  // Carrito flotante — productos + envío
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('verde:cart:update', {
+      detail: { items: totalItems, total: totalDeposit + effectiveDeliveryFee },
+    }));
+  }, [totalItems, totalDeposit, effectiveDeliveryFee]);
 
   const monthMap: Record<string, DayAvailability[]> = {};
   for (const day of availability) {
@@ -407,6 +923,30 @@ export default function ReservationForm({
   const step5Done =
     fields.deliveryMethod === "pickup" ||
     !!(fields.deliveryAddress.trim().length >= 5 && fields.postalCode.trim());
+
+  // Carrito flotante → llevar a "Tu selección". Antes empujaba hacia adelante
+  // (popup de bebidas o siguiente paso), así que quien quería ver o corregir su
+  // pedido no tenía forma de llegar a la lista: en móvil queda a media página de
+  // scroll. El botón de continuar está justo debajo, así que no se pierde nada.
+  useEffect(() => {
+    function onCartOpen() {
+      // Sin scroll propio del paso: el destino es el panel, no la cabecera.
+      goToStep(1, { scroll: false });
+      scrollSuaveA(() => seleccionRef.current, "center");
+    }
+    window.addEventListener("verde:cart:open", onCartOpen);
+    return () => window.removeEventListener("verde:cart:open", onCartOpen);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Recalcular animaciones GSAP cuando cambia el alto (al colapsar/expandir pasos)
+  useEffect(() => {
+    const t = setTimeout(
+      () => window.dispatchEvent(new Event("verde:layout:changed")),
+      120
+    );
+    return () => clearTimeout(t);
+  }, [currentStep, maxStep]);
 
   // ── Submit (logic unchanged — same payload to /api/create-checkout-session) ──
 
@@ -445,6 +985,30 @@ export default function ReservationForm({
         goToStep(5);
         return;
       }
+      // El envío se calcula al pulsar "Ver resumen y pagar" (continueFromDelivery).
+      // Este guard solo salta si se llega sin cálculo: vuelve al paso de envío.
+      if (!delivery) {
+        setError("Revisa tu dirección de envío en el paso anterior.");
+        goToStep(5);
+        return;
+      }
+      if (!delivery.deliverable) {
+        setError(PICKUP_ENABLED ? "Aún no llegamos a tu zona. Elige recogida en local o prueba otra dirección." : "Aún no llegamos a tu zona. Prueba otra dirección o escríbenos por WhatsApp.");
+        goToStep(5);
+        return;
+      }
+      // El carrito puede haber cambiado después del paso de entrega: el mínimo
+      // por zona se revalida aquí (y el servidor lo vuelve a comprobar).
+      if (faltaParaMinimo(delivery.zone) > 0) {
+        setError(mensajeMinimo(delivery.zone));
+        goToStep(1);
+        return;
+      }
+    }
+
+    if (requireAccessCode && !accessCode.trim()) {
+      setError("Introduce tu código de acceso anticipado (lista de espera) para reservar.");
+      return;
     }
 
     if (!privacyAccepted || !termsAccepted) {
@@ -477,19 +1041,43 @@ export default function ReservationForm({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           items: cartProducts.map((p) => ({ productId: p.id, quantity: cart[p.id] })),
-          reservationDate: fields.reservationDate,
-          reservationTime: fields.reservationTime,
+          reservationDate: isDirecto ? todayMadrid() : fields.reservationDate,
+          reservationTime: isDirecto ? etaFromNow() : fields.reservationTime,
+          directo: isDirecto,
+          origen: leerOrigen() ?? undefined,
           customerName: fields.customerName,
           email: fields.email,
           phone: fields.phone,
-          notes: fields.notes,
+          notes: [
+            allergens.length
+              ? `Alergias: ${allergens.join(", ")}`
+              : "Alergias: ninguna",
+            `Cubiertos: ${cutlery ? "sí" : "no"}`,
+            // Elecciones incluidas (p. ej. bebida del menú): van solas a las
+            // notas — la cocina las lee donde ya lee alergias y cubiertos.
+            ...PRODUCT_CHOICES.filter((c) =>
+              cartProducts.some((p) => mismoId(p.id, c.productId))
+            ).map((c) => {
+              const prod = cartProducts.find((p) => mismoId(p.id, c.productId))!;
+              return `${c.label}: ${choices[prod.id] ?? c.options[0]}`;
+            }),
+            fields.notes.trim(),
+          ]
+            .filter(Boolean)
+            .join(" · ")
+            .slice(0, 500),
           deliveryMethod: fields.deliveryMethod,
           deliveryAddress: fields.deliveryAddress,
           deliveryDetails: fields.deliveryDetails,
           postalCode: fields.postalCode,
           deliveryZone: fields.deliveryZone,
+          deliveryZoneLevel:
+            fields.deliveryMethod === "delivery" && delivery?.deliverable
+              ? delivery.zone
+              : null,
           privacyAccepted,
           termsAccepted,
+          accessCode: requireAccessCode ? accessCode.trim() : undefined,
         }),
       });
 
@@ -623,29 +1211,62 @@ export default function ReservationForm({
 
   return (
     <section className="py-20 px-6" id="reservar">
-      <div className="max-w-2xl mx-auto">
+      <div className="max-w-6xl mx-auto">
 
         {/* Header */}
         <div className="mb-14">
-          <p className="text-negro/30 text-[10px] font-medium tracking-[0.4em] uppercase mb-3">
+          <p className="text-[#c85a2a]/70 text-[10px] font-medium tracking-[0.4em] uppercase mb-3">
             Tu pedido
           </p>
           <h2 className="text-verde-bosque text-3xl sm:text-4xl font-bold tracking-tight mb-3">
-            Pide tu verde
+            Haz tu pedido
           </h2>
           <p className="text-negro/50 text-sm leading-relaxed">
             Añade uno o varios productos y paga online de forma segura.
           </p>
           {livePromotion?.isActive && (
-            <div className="mt-4 inline-flex items-center gap-2 border border-verde-bosque/20 bg-verde-bosque/5 px-3 py-1.5">
+            <div className="mt-4 inline-flex items-center gap-2 border border-[#c85a2a]/20 bg-[#c85a2a]/5 px-3 py-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-verde-platano shrink-0" />
-              <p className="text-[11px] font-medium text-verde-bosque/80">
+              <p className="text-[11px] font-medium text-[#c85a2a]/80">
                 {livePromotion.promoName}: {livePromotion.promoValue}% de descuento esta semana
               </p>
             </div>
           )}
+
+          {weekendOffer && (
+            <div
+              className="mt-4 rounded-xl px-4 py-3 max-w-md"
+              style={{
+                background:
+                  "linear-gradient(100deg, rgba(200,90,42,0.14), rgba(217,164,65,0.16))",
+                border: "1px solid rgba(200,90,42,0.28)",
+              }}
+            >
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-bold text-[13px] text-[#a8451f] tracking-tight">
+                  {weekendOffer.name}
+                </span>
+                <span className="text-[9px] font-bold uppercase tracking-[0.15em] text-white bg-[#c85a2a] rounded-full px-2 py-0.5 shrink-0">
+                  {weekendOffer.badge}
+                </span>
+              </div>
+              <p className="text-[12px] text-negro/60 leading-snug mt-0.5">
+                {weekendOffer.tagline}. {offerRuleText(weekendOffer)}
+              </p>
+              {offerReservationText(weekendOffer) && (
+                <p className="text-[11px] font-semibold text-[#a8451f] leading-snug mt-1.5">
+                  {offerReservationText(weekendOffer)}
+                </p>
+              )}
+            </div>
+          )}
         </div>
 
+        {requireAccessCode && !unlocked && (
+          <AccessGate code={accessCodeValue} onUnlock={handleUnlock} />
+        )}
+
+        {(!requireAccessCode || unlocked) && (
         <form onSubmit={handleSubmit} noValidate>
 
           {/* ── PASO 1: PRODUCTO ── */}
@@ -657,10 +1278,109 @@ export default function ReservationForm({
             isDone={currentStep > 1}
             summary={cartProducts.map((p) => `${p.name} ×${cart[p.id]}`).join(" · ")}
             onEdit={() => goToStep(1)}
+            editLabel="+ Añadir más"
+            editProminent
           >
+            {/* Selector de modo: para hoy (en directo) u otro día. Solo cuando
+                el directo está abierto; si no, siempre reserva a días vista. */}
+            {directoAvailable && (
+              <div className="mb-5">
+                <span className={labelClass}>¿Para cuándo lo quieres?</span>
+                <div className="mt-2 grid grid-cols-2 gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setOrderMode("hoy")}
+                    aria-pressed={orderMode === "hoy"}
+                    className={clsx(
+                      "flex items-center gap-2.5 rounded-xl border px-3 py-2.5 text-left transition-colors",
+                      orderMode === "hoy"
+                        ? "border-verde-bosque bg-verde-bosque text-crema"
+                        : "border-negro/15 bg-white text-negro/70 hover:border-negro/30"
+                    )}
+                  >
+                    <span className="text-xl leading-none" aria-hidden>🛵</span>
+                    <span className="leading-tight">
+                      <span className="block font-bold text-[13.5px]">Para hoy</span>
+                      <span className="block text-[11px] opacity-80">En directo · ~40 min</span>
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOrderMode("otro")}
+                    aria-pressed={orderMode === "otro"}
+                    className={clsx(
+                      "flex items-center gap-2.5 rounded-xl border px-3 py-2.5 text-left transition-colors",
+                      orderMode === "otro"
+                        ? "border-verde-bosque bg-verde-bosque text-crema"
+                        : "border-negro/15 bg-white text-negro/70 hover:border-negro/30"
+                    )}
+                  >
+                    <span className="text-xl leading-none" aria-hidden>📅</span>
+                    <span className="leading-tight">
+                      <span className="block font-bold text-[13.5px]">Otro día</span>
+                      <span className="block text-[11px] opacity-80">Reserva con fecha</span>
+                    </span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Banner "en directo": pedido para hoy, entrega ~40 min */}
+            {isDirecto && (
+              <div
+                className="mb-5 flex items-center gap-3 rounded-xl px-4 py-3"
+                style={{ background: "var(--g1, #2E4F20)", color: "#fff" }}
+              >
+                <span className="text-xl leading-none" aria-hidden>
+                  🛵
+                </span>
+                <div className="leading-tight">
+                  <div className="font-bold text-[14px]">
+                    Pedido en directo · llega en ~40 min
+                  </div>
+                  <div className="text-[12px] opacity-90">
+                    Para hoy, sin elegir día ni hora — hacia las {etaFromNow()}.
+                  </div>
+                </div>
+              </div>
+            )}
+
             {(() => {
+              // Variantes de tamaño: resolver opciones reales y ocultar las que
+              // se muestran como selector (p.ej. la media ración) para que no
+              // ocupen una card propia en la carta.
+              const byId = new Map(products.map((p) => [p.id, p]));
+              const sizeOptionsByBase: Record<string, SizeOption[]> = {};
+              const hiddenVariantIds = new Set<string>();
+              for (const g of SIZE_VARIANT_GROUPS) {
+                if (!byId.has(g.baseId)) continue; // sin base → no agrupar
+                const opts = g.options
+                  .map((o) => ({ label: o.label, product: byId.get(o.id) }))
+                  .filter((o): o is SizeOption => !!o.product);
+                if (opts.length < 2) continue; // menos de 2 tamaños → sin selector
+                sizeOptionsByBase[g.baseId] = opts;
+                for (const o of opts)
+                  if (o.product.id !== g.baseId) hiddenVariantIds.add(o.product.id);
+              }
+
+              // Extras de plato: se muestran dentro de la card del base y se
+              // ocultan como card propia (p.ej. reahogado dentro del corviche).
+              const addonsByBase: Record<string, { label: string; product: Product }[]> = {};
+              for (const g of PRODUCT_ADDONS) {
+                if (!byId.has(g.baseId)) continue;
+                const addons = g.addons
+                  .map((a) => ({ label: a.label, product: byId.get(a.id) }))
+                  .filter((a): a is { label: string; product: Product } => !!a.product);
+                if (!addons.length) continue;
+                addonsByBase[g.baseId] = addons;
+                for (const a of addons) hiddenVariantIds.add(a.product.id);
+              }
+
               const grouped: Partial<Record<NormalizedCategory, typeof products>> = {};
               for (const p of products) {
+                if (p.isPack) continue; // los packs no se muestran en la carta
+                if (hiddenVariantIds.has(p.id)) continue; // variante → va como selector
+                if ((p.category ?? "").trim().toLowerCase() === "salsas") continue; // salsas → popup
                 const cat = normalizeCategory(p.category ?? "");
                 (grouped[cat] ??= []).push(p);
               }
@@ -670,7 +1390,7 @@ export default function ReservationForm({
               return (
                 <div className="space-y-8">
                   {activeGroups.map((cat) => (
-                    <div key={cat}>
+                    <div key={cat} id={`cat-${cat.toLowerCase()}`}>
                       {showHeadings && (
                         <div className="mb-4">
                           <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-verde-bosque/70 mb-1">
@@ -681,24 +1401,195 @@ export default function ReservationForm({
                           </p>
                         </div>
                       )}
-                      <div className="grid gap-4 sm:grid-cols-2">
-                        {grouped[cat]!.map((product) => (
-                          <ProductCard
+                      {/* Móvil: fila deslizable · Escritorio: rejilla */}
+                      <div className="flex gap-3 overflow-x-auto snap-x snap-mandatory pb-3 sm:grid sm:grid-cols-3 lg:grid-cols-4 sm:gap-4 sm:overflow-visible sm:pb-0">
+                        {grouped[cat]!.map((product) => {
+                          const choiceCfg = PRODUCT_CHOICES.find((c) =>
+                            mismoId(c.productId, product.id)
+                          );
+                          // Sin stock para la fecha elegida (p. ej. bolón solo
+                          // mañana): se muestra agotado SOLO ese día.
+                          const sinStockFecha =
+                            !!fields.reservationDate &&
+                            agotadoParaFecha(product.id, fields.reservationDate);
+                          const cardProduct = sinStockFecha
+                            ? { ...product, available: false }
+                            : product;
+                          return (
+                          <div
                             key={product.id}
-                            product={product}
-                            quantity={cart[product.id] ?? 0}
-                            maxQuantity={config.maxQuantityPerOrder}
-                            onAdd={addToCart}
-                            onIncrement={increment}
-                            onDecrement={decrement}
-                          />
-                        ))}
+                            className="shrink-0 w-[46%] snap-start sm:w-full"
+                          >
+                            <ProductCard
+                              product={cardProduct}
+                              quantity={cart[product.id] ?? 0}
+                              maxQuantity={config.maxQuantityPerOrder}
+                              onAdd={addToCart}
+                              onIncrement={increment}
+                              onDecrement={decrement}
+                              sizeOptions={sizeOptionsByBase[product.id]}
+                              addons={addonsByBase[product.id]}
+                              quantityOf={(id) => cart[id] ?? 0}
+                              image={imageForProduct(product)}
+                              choiceLabel={choiceCfg?.label}
+                              choiceOptions={choiceCfg?.options}
+                              choiceValue={
+                                choiceCfg
+                                  ? choices[product.id] ?? choiceCfg.options[0]
+                                  : undefined
+                              }
+                              onChoiceChange={(v) =>
+                                setChoices((prev) => ({ ...prev, [product.id]: v }))
+                              }
+                              offerBadge={
+                                weekendOffer &&
+                                productMatchesOffer(weekendOffer, {
+                                  id: product.id,
+                                  name: product.name,
+                                })
+                                  ? offerBadgeLabel(weekendOffer)
+                                  : undefined
+                              }
+                            />
+                          </div>
+                          );
+                        })}
                       </div>
                     </div>
                   ))}
                 </div>
               );
             })()}
+
+            {/* Aviso de alérgenos + contaminación cruzada (abajo, tras la carta) */}
+            <div
+              className="mt-8 flex items-start gap-3 rounded-xl border px-4 py-3"
+              style={{
+                background: "rgba(200,90,42,0.08)",
+                borderColor: "rgba(200,90,42,0.3)",
+              }}
+            >
+              <span className="text-lg leading-none" aria-hidden>
+                ⚠️
+              </span>
+              <p className="text-[13px] leading-snug text-negro/70">
+                <span className="font-bold text-tierra">
+                  Puede contener trazas de cacahuete y frutos secos.
+                </span>{" "}
+                Toca cada plato para ver sus alérgenos. Información orientativa;
+                ante una alergia grave, escríbenos antes de pedir.
+              </p>
+            </div>
+
+            {/* ── Tu selección ──────────────────────────────────────────────
+                Única lista donde está TODO lo del carrito. Hace falta porque
+                hay cosas que no tienen card propia en la carta y, sin esto, no
+                habría forma de tocarlas: packs y ofertas (se añaden desde el
+                bloque de ofertas) y salsas (se añaden en el popup de extras,
+                que solo aparece una vez). */}
+            {cartProducts.length > 0 && (
+              <div className="mt-6 scroll-mt-24" ref={seleccionRef} id="tu-seleccion">
+                <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-verde-bosque/60 mb-3">
+                  Tu selección
+                </p>
+                <div className="space-y-2">
+                  {cartProducts.map((p) => {
+                    const qty = cart[p.id] ?? 0;
+                    const enTope = qty >= config.maxQuantityPerOrder;
+                    const choiceCfg = PRODUCT_CHOICES.find((c) =>
+                      mismoId(c.productId, p.id)
+                    );
+                    return (
+                      <div
+                        key={p.id}
+                        className="flex items-center gap-2 rounded-lg border border-verde-bosque/15 bg-verde-bosque/[0.04] px-3 py-2"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm text-negro/80 leading-snug">
+                            {p.name}
+                            {p.isPack && (
+                              <span className="ml-2 align-middle text-[9px] font-bold uppercase tracking-[0.12em] text-white bg-[#c85a2a] rounded-full px-1.5 py-0.5">
+                                Oferta
+                              </span>
+                            )}
+                          </p>
+                          {choiceCfg && (
+                            <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                              <span className="text-[11px] text-negro/45">
+                                {choiceCfg.label}:
+                              </span>
+                              {choiceCfg.options.map((opt) => {
+                                const sel =
+                                  (choices[p.id] ?? choiceCfg.options[0]) === opt;
+                                return (
+                                  <button
+                                    key={opt}
+                                    type="button"
+                                    onClick={() =>
+                                      setChoices((prev) => ({ ...prev, [p.id]: opt }))
+                                    }
+                                    aria-pressed={sel}
+                                    className={clsx(
+                                      "rounded-full border px-2.5 py-0.5 text-[10.5px] font-semibold transition-colors",
+                                      sel
+                                        ? "border-verde-bosque bg-verde-bosque/10 text-verde-bosque"
+                                        : "border-negro/15 text-negro/45 hover:border-negro/30"
+                                    )}
+                                  >
+                                    {opt}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+                          <p className="text-xs font-semibold text-verde-bosque mt-0.5">
+                            {fmtPrice(p.depositAmount * qty)} €
+                            {qty > 1 && (
+                              <span className="font-normal text-negro/40">
+                                {" "}· {fmtPrice(p.depositAmount)} € c/u
+                              </span>
+                            )}
+                          </p>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => decrement(p.id)}
+                            className="w-8 h-8 rounded-full bg-negro/10 text-negro/60 leading-none text-lg hover:bg-negro/15 transition-colors"
+                            aria-label={`Quitar una unidad de ${p.name}`}
+                          >
+                            −
+                          </button>
+                          <span className="text-sm font-bold w-5 text-center tabular-nums">
+                            {qty}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => increment(p.id)}
+                            disabled={enTope}
+                            className="w-8 h-8 rounded-full bg-verde-bosque text-crema leading-none text-lg hover:bg-verde-platano transition-colors disabled:opacity-30"
+                            aria-label={`Añadir otra unidad de ${p.name}`}
+                          >
+                            +
+                          </button>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => removeItem(p.id)}
+                          className="shrink-0 w-8 h-8 rounded-full text-negro/35 hover:text-tierra hover:bg-tierra/10 transition-colors leading-none text-lg"
+                          aria-label={`Quitar ${p.name} del pedido`}
+                          title="Quitar del pedido"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {cartProducts.length > 0 && (
               <>
@@ -710,23 +1601,41 @@ export default function ReservationForm({
                     {cartProducts.length === 1 ? "producto" : "productos"}
                   </p>
                   <p className="text-sm font-semibold text-verde-bosque">
-                    Total: {totalDeposit} €
+                    Total: {fmtPrice(totalDeposit)} €
                   </p>
                 </div>
 
                 <button
                   type="button"
-                  onClick={() => goToStep(2)}
-                  className="mt-5 w-full bg-verde-bosque text-crema text-[11px] font-semibold tracking-[0.2em] uppercase py-4 px-6 hover:bg-verde-platano transition-all duration-300"
+                  onClick={continueFromMenu}
+                  className="mt-5 w-full bg-[#c85a2a] text-crema text-[11px] font-semibold tracking-[0.2em] uppercase py-4 px-6 hover:bg-[#d96535] transition-all duration-300"
                 >
                   Continuar con la fecha
                 </button>
+
+                {/* Aviso vivo del pedido mínimo: visible desde el primer
+                    producto si el pedido no llega, baja al añadir y desaparece
+                    solo al alcanzar el mínimo. El candado de goToStep impide
+                    avanzar mientras este aviso esté a la vista. */}
+                {faltaParaEmpezar() > 0 && (
+                  <div
+                    className="mt-3 rounded-xl border px-3.5 py-2.5"
+                    style={{
+                      background: "rgba(200,90,42,0.09)",
+                      borderColor: "rgba(200,90,42,0.32)",
+                    }}
+                  >
+                    <p className="text-[12.5px] leading-snug text-negro/75">
+                      {mensajeMinimoGlobal()}
+                    </p>
+                  </div>
+                )}
               </>
             )}
           </StepSection>
 
-          {/* ── PASO 2: FECHA ── */}
-          {maxStep >= 2 && (
+          {/* ── PASO 2: FECHA ── (oculto en modo directo: es para HOY) */}
+          {maxStep >= 2 && !isDirecto && (
             <StepSection
               stepRef={ref2}
               number={2}
@@ -745,7 +1654,7 @@ export default function ReservationForm({
                 className={clsx(
                   "mt-5 w-full text-[11px] font-semibold tracking-[0.2em] uppercase py-4 px-6 transition-all duration-300",
                   step2Done
-                    ? "bg-verde-bosque text-crema hover:bg-verde-platano"
+                    ? "bg-[#c85a2a] text-crema hover:bg-[#d96535]"
                     : "bg-negro/8 text-negro/30 cursor-not-allowed"
                 )}
               >
@@ -754,15 +1663,15 @@ export default function ReservationForm({
             </StepSection>
           )}
 
-          {/* ── PASO 3: HORA ── */}
-          {maxStep >= 3 && (
+          {/* ── PASO 3: HORA ── (oculto en modo directo: entrega ~40 min) */}
+          {maxStep >= 3 && !isDirecto && (
             <StepSection
               stepRef={ref3}
               number={3}
               title="Elige la hora"
               isActive={currentStep === 3}
               isDone={currentStep > 3}
-              summary={step3Done ? fields.reservationTime : "Pendiente"}
+              summary={step3Done ? formatDeliveryWindow(fields.reservationTime) : "Pendiente"}
               onEdit={() => goToStep(3)}
             >
               {selectedDay && selectedDay.slots.length > 0 ? (
@@ -777,7 +1686,7 @@ export default function ReservationForm({
                         disabled={isSoldOut}
                         onClick={() => selectTime(slot.time)}
                         className={clsx(
-                          "px-4 py-2 text-sm font-medium border transition-all duration-150",
+                          "px-4 py-2 text-sm font-medium border rounded-lg transition-all duration-150",
                           isSelected &&
                             "bg-verde-bosque text-crema border-verde-bosque",
                           !isSelected &&
@@ -805,6 +1714,14 @@ export default function ReservationForm({
                 </p>
               )}
 
+              {selectedDay && selectedDay.slots.length > 0 && (
+                <p className="-mt-2 mb-5 text-sm text-negro/55">
+                  {fields.reservationTime
+                    ? <>Te lo entregamos <b className="text-verde-bosque">{deliveryWindowSentence(fields.reservationTime)}</b>.</>
+                    : `La entrega llega en un margen de ${DELIVERY_WINDOW_MIN} min desde la hora que elijas.`}
+                </p>
+              )}
+
               <button
                 type="button"
                 disabled={!step3Done}
@@ -812,7 +1729,7 @@ export default function ReservationForm({
                 className={clsx(
                   "w-full text-[11px] font-semibold tracking-[0.2em] uppercase py-4 px-6 transition-all duration-300",
                   step3Done
-                    ? "bg-verde-bosque text-crema hover:bg-verde-platano"
+                    ? "bg-[#c85a2a] text-crema hover:bg-[#d96535]"
                     : "bg-negro/8 text-negro/30 cursor-not-allowed"
                 )}
               >
@@ -898,6 +1815,75 @@ export default function ReservationForm({
                   />
                 </div>
                 <div className="sm:col-span-2">
+                  <span className={labelClass}>¿Alguna alergia? (opcional)</span>
+                  <div className="flex flex-wrap gap-2 mt-1">
+                    {ALLERGENS.map((a) => {
+                      const on = allergens.includes(a);
+                      return (
+                        <button
+                          key={a}
+                          type="button"
+                          onClick={() => toggleAllergen(a)}
+                          aria-pressed={on}
+                          className={clsx(
+                            "rounded-full border px-3 py-1.5 text-xs font-medium transition-colors",
+                            on
+                              ? "border-verde-bosque bg-verde-bosque/10 text-verde-bosque"
+                              : "border-negro/15 text-negro/55 hover:border-negro/30"
+                          )}
+                        >
+                          {a}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="text-[11px] text-negro/40 mt-2">
+                    Marca lo que debamos evitar. Se lo pasamos a cocina destacado
+                    en tu pedido.
+                  </p>
+
+                  {/* Alerta: alergia marcada que está en algún plato del carrito */}
+                  {(allergenConflicts.length > 0 || dishesSinDetallar.length > 0) && (
+                    <div
+                      className="mt-3 rounded-xl border px-3.5 py-3"
+                      style={{
+                        background: "rgba(200,42,42,0.07)",
+                        borderColor: "rgba(200,42,42,0.35)",
+                      }}
+                    >
+                      <p
+                        className="text-[11px] font-bold uppercase tracking-[0.12em] mb-1.5"
+                        style={{ color: "#b3261e" }}
+                      >
+                        ⚠️ Atención con tu pedido
+                      </p>
+                      {allergenConflicts.map((c) => (
+                        <p
+                          key={c.allergen}
+                          className="text-[12.5px] leading-snug text-negro/75"
+                        >
+                          Has marcado{" "}
+                          <span className="font-bold" style={{ color: "#b3261e" }}>
+                            {c.allergen}
+                          </span>{" "}
+                          y tu pedido incluye: {c.dishes.join(", ")}.
+                        </p>
+                      ))}
+                      {dishesSinDetallar.length > 0 && (
+                        <p className="text-[12.5px] leading-snug text-negro/75">
+                          No tenemos detallados los alérgenos de:{" "}
+                          {dishesSinDetallar.join(", ")}. Pregúntanos antes de
+                          pedirlo.
+                        </p>
+                      )}
+                      <p className="text-[11px] text-negro/50 mt-1.5">
+                        Revísalo antes de pagar. Si es una alergia grave, no lo
+                        pidas y escríbenos.
+                      </p>
+                    </div>
+                  )}
+                </div>
+                <div className="sm:col-span-2">
                   <label htmlFor="notes" className={labelClass}>
                     Notas (opcional)
                   </label>
@@ -905,7 +1891,7 @@ export default function ReservationForm({
                     id="notes"
                     name="notes"
                     rows={2}
-                    placeholder="Alergias, instrucciones especiales..."
+                    placeholder="Instrucciones especiales, indicaciones para el repartidor..."
                     value={fields.notes}
                     onChange={handleFieldChange}
                     className={clsx(inputClass, "resize-none")}
@@ -920,7 +1906,7 @@ export default function ReservationForm({
                 className={clsx(
                   "mt-6 w-full text-[11px] font-semibold tracking-[0.2em] uppercase py-4 px-6 transition-all duration-300",
                   step4Done
-                    ? "bg-verde-bosque text-crema hover:bg-verde-platano"
+                    ? "bg-[#c85a2a] text-crema hover:bg-[#d96535]"
                     : "bg-negro/8 text-negro/30 cursor-not-allowed"
                 )}
               >
@@ -946,7 +1932,8 @@ export default function ReservationForm({
               }
               onEdit={() => goToStep(5)}
             >
-              {/* Método */}
+              {/* Método (oculto si la recogida está desactivada) */}
+              {PICKUP_ENABLED && (
               <div className="mb-6">
                 <p className={clsx(labelClass, "mb-3")}>Método de entrega</p>
                 <div className="flex border border-negro/15 w-fit">
@@ -980,6 +1967,30 @@ export default function ReservationForm({
                   </button>
                 </div>
               </div>
+              )}
+
+              {fields.deliveryMethod === "pickup" && (
+                <div className="mb-2 border border-verde-bosque/25 bg-verde-bosque/[0.05] p-5">
+                  <p className="text-[11px] font-semibold tracking-[0.18em] uppercase text-verde-bosque mb-1">
+                    Recoges tu pedido en
+                  </p>
+                  <p className="text-sm font-medium text-negro/80">
+                    {PICKUP_ADDRESS}
+                  </p>
+                  <a
+                    href={PICKUP_MAPS_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-block mt-2 text-xs text-verde-bosque underline underline-offset-2 hover:text-verde-platano"
+                  >
+                    Ver cómo llegar ↗
+                  </a>
+                  <p className="text-[11px] text-negro/40 mt-2 leading-relaxed">
+                    Te avisaremos cuando tu pedido esté listo para recoger en el
+                    día y hora elegidos.
+                  </p>
+                </div>
+              )}
 
               {fields.deliveryMethod === "delivery" && (
                 <>
@@ -998,7 +2009,7 @@ export default function ReservationForm({
                         name="deliveryAddress"
                         type="text"
                         required
-                        placeholder="Calle, número, piso, puerta"
+                        placeholder="Calle, número, piso…"
                         value={fields.deliveryAddress}
                         onChange={handleFieldChange}
                         className={inputClass}
@@ -1035,19 +2046,44 @@ export default function ReservationForm({
                     </div>
                     <div className="sm:col-span-2">
                       <label htmlFor="deliveryDetails" className={labelClass}>
-                        Detalles de entrega (opcional)
+                        Piso, puerta y detalles de entrega
                       </label>
                       <input
                         id="deliveryDetails"
                         name="deliveryDetails"
                         type="text"
-                        placeholder="Timbre, referencia, indicaciones para el repartidor"
+                        placeholder="Piso, puerta, escalera, timbre, referencia para el repartidor..."
                         value={fields.deliveryDetails}
                         onChange={handleFieldChange}
                         className={inputClass}
                       />
                     </div>
                   </div>
+
+                  {/* Cálculo de envío */}
+                  <div className="mt-6 flex flex-wrap items-center gap-4">
+                    <button
+                      type="button"
+                      onClick={calcDelivery}
+                      className="text-[11px] font-semibold tracking-[0.15em] uppercase px-5 py-3 bg-verde-bosque text-crema transition-colors hover:bg-verde-platano"
+                    >
+                      Calcular envío
+                    </button>
+                    {delivery?.deliverable && effectiveDeliveryFee > 0 && (
+                      <span className="text-sm font-medium text-verde-bosque">
+                        Envío{delivery.zone ? ` · Zona ${delivery.zone}` : ""}:{" "}
+                        {effectiveDeliveryFee.toFixed(2).replace(".", ",")} €
+                        {minOrderForZone(delivery.zone) > 0 && (
+                          <span className="font-normal text-negro/40">
+                            {" "}· pedido mínimo {minOrderForZone(delivery.zone)} €
+                          </span>
+                        )}
+                      </span>
+                    )}
+                  </div>
+                  {deliveryError && (
+                    <p className="mt-2 text-xs text-tierra">{deliveryError}</p>
+                  )}
                 </>
               )}
 
@@ -1073,11 +2109,11 @@ export default function ReservationForm({
               <button
                 type="button"
                 disabled={!step5Done}
-                onClick={() => step5Done && goToStep(6)}
+                onClick={() => step5Done && continueFromDelivery()}
                 className={clsx(
                   "w-full text-[11px] font-semibold tracking-[0.2em] uppercase py-4 px-6 transition-all duration-300",
                   step5Done
-                    ? "bg-verde-bosque text-crema hover:bg-verde-platano"
+                    ? "bg-[#c85a2a] text-crema hover:bg-[#d96535]"
                     : "bg-negro/8 text-negro/30 cursor-not-allowed"
                 )}
               >
@@ -1098,6 +2134,41 @@ export default function ReservationForm({
               onEdit={() => {}}
               showEditButton={false}
             >
+
+              {/* Alerta final: alergia marcada presente en el pedido */}
+              {allergenConflicts.length > 0 && (
+                <div
+                  className="mb-6 rounded-xl border px-4 py-3.5"
+                  style={{
+                    background: "rgba(200,42,42,0.07)",
+                    borderColor: "rgba(200,42,42,0.35)",
+                  }}
+                >
+                  <p
+                    className="text-[11px] font-bold uppercase tracking-[0.12em] mb-1.5"
+                    style={{ color: "#b3261e" }}
+                  >
+                    ⚠️ Atención con tu pedido
+                  </p>
+                  {allergenConflicts.map((c) => (
+                    <p
+                      key={c.allergen}
+                      className="text-[12.5px] leading-snug text-negro/75"
+                    >
+                      Has marcado{" "}
+                      <span className="font-bold" style={{ color: "#b3261e" }}>
+                        {c.allergen}
+                      </span>{" "}
+                      y tu pedido incluye: {c.dishes.join(", ")}.
+                    </p>
+                  ))}
+                  <p className="text-[11px] text-negro/50 mt-1.5">
+                    Si es una alergia grave, no completes el pago y escríbenos.
+                  </p>
+                </div>
+              )}
+
+              <div className="bg-verde-bosque/5 rounded-xl p-6 mb-6">
               {/* Products */}
               <div className="space-y-2 mb-6">
                 {cartProducts.map((p) => (
@@ -1109,7 +2180,7 @@ export default function ReservationForm({
                       {p.name}{" "}
                       <span className="text-negro/38">×{cart[p.id]}</span>
                     </span>
-                    <span>{p.finalPrice * (cart[p.id] ?? 0)} €</span>
+                    <span>{fmtPrice(p.finalPrice * (cart[p.id] ?? 0))} €</span>
                   </div>
                 ))}
               </div>
@@ -1123,8 +2194,8 @@ export default function ReservationForm({
                   </span>
                 </div>
                 <div className="flex justify-between text-sm text-negro/45">
-                  <span>Hora</span>
-                  <span>{fields.reservationTime}</span>
+                  <span>Entrega</span>
+                  <span>{formatDeliveryWindow(fields.reservationTime)}</span>
                 </div>
                 <div className="flex justify-between text-sm text-negro/45">
                   <span>Nombre</span>
@@ -1149,39 +2220,62 @@ export default function ReservationForm({
                   </>
                 ) : (
                   <div className="flex justify-between text-sm text-negro/45">
-                    <span>Entrega</span>
-                    <span>Recogida en local</span>
+                    <span>Recoges en</span>
+                    <span className="text-right max-w-[60%] text-negro/70">
+                      {PICKUP_ADDRESS}
+                    </span>
                   </div>
                 )}
               </div>
 
               {/* Totals */}
               <div className="space-y-2 border-t border-negro/10 pt-4 mb-8 text-sm">
-                {livePromotion?.isActive && discountAmount > 0 ? (
-                  <>
-                    <div className="flex justify-between text-negro/50">
-                      <span>Subtotal</span>
-                      <span>{totalDeposit} €</span>
-                    </div>
-                    <div className="flex justify-between text-verde-bosque/75">
-                      <span>{livePromotion.promoName} −{livePromotion.promoValue}%</span>
-                      <span>−{discountAmount} €</span>
-                    </div>
-                    <div className="flex justify-between pt-2 mt-1 font-semibold text-verde-bosque border-t border-negro/8">
-                      <span>Total a pagar hoy</span>
-                      <span>{totalAfterDiscount} €</span>
-                    </div>
-                  </>
-                ) : (
-                  <div className="flex justify-between pt-2 font-semibold text-verde-bosque">
-                    <span>Total a pagar hoy</span>
-                    <span>{totalDeposit} €</span>
+                <div className="flex justify-between text-negro/50">
+                  <span>Subtotal</span>
+                  <span>{totalDeposit.toFixed(2).replace(".", ",")} €</span>
+                </div>
+                {ventanaLive && !esMiercolesOJueves(fields.reservationDate) && (
+                  <p className="text-[11px] leading-snug text-[#b3261e]">
+                    El −{VENTANA_LUNES.porcentaje}% de la {VENTANA_LUNES.nombre} es
+                    solo para entregas de miércoles o jueves. Cambia el día para
+                    aprovecharla.
+                  </p>
+                )}
+                {promoAplicada && discountAmount > 0 && (
+                  <div className="flex justify-between text-verde-bosque/75">
+                    <span>{promoAplicada.nombre} −{promoAplicada.pct}%</span>
+                    <span>−{discountAmount.toFixed(2).replace(".", ",")} €</span>
                   </div>
                 )}
+                {weekendOffer && offerDiscount > 0 && (
+                  <div className="flex justify-between text-[#c85a2a]">
+                    <span>
+                      {weekendOffer.name} · {offerResult.discountedUnits}× {offerBadgeLabel(weekendOffer)}
+                    </span>
+                    <span>−{offerDiscount.toFixed(2).replace(".", ",")} €</span>
+                  </div>
+                )}
+                {effectiveDeliveryFee > 0 && (
+                  <div className="flex justify-between text-negro/50">
+                    <span>Envío{delivery?.zone ? ` · Zona ${delivery.zone}` : ""}</span>
+                    <span>{effectiveDeliveryFee.toFixed(2).replace(".", ",")} €</span>
+                  </div>
+                )}
+                <div className="flex justify-between pt-2 mt-1 font-semibold text-verde-bosque border-t border-negro/8">
+                  <span>Total a pagar hoy</span>
+                  <span>{grandTotal.toFixed(2).replace(".", ",")} €</span>
+                </div>
+                {/* IVA informativo: ya incluido en el total, no lo modifica */}
+                {ivaGroups.map((g) => (
+                  <div key={g.rate} className="text-[11px] text-negro/40 leading-snug">
+                    Incluye {formatCents(g.vat)} € de IVA ({ratePercent(g.rate)} %)
+                  </div>
+                ))}
+              </div>
               </div>
 
               {/* ── Aceptación legal ── */}
-              <div className="space-y-3 mb-6 border border-negro/8 p-4 bg-negro/[0.02]">
+              <div className="space-y-3 mb-6 border border-negro/8 p-4 bg-crema rounded-lg">
                 <label className="flex items-start gap-3 cursor-pointer">
                   <input
                     type="checkbox"
@@ -1256,7 +2350,25 @@ export default function ReservationForm({
           )}
 
         </form>
+        )}
       </div>
+
+      {showDrinkModal && (
+        <DrinkUpsellModal
+          drinks={drinkProducts}
+          salsas={salsaProducts}
+          cart={cart}
+          cutlery={cutlery}
+          onCutleryChange={setCutlery}
+          onAdd={addToCart}
+          onIncrement={increment}
+          onDecrement={decrement}
+          onContinue={dismissDrinkModal}
+          minOrder={minPedidoAviso}
+          faltaMinimo={faltaMinimoAviso}
+          continueLabel={rescueOrigin ? "Seguir con mi pedido" : undefined}
+        />
+      )}
     </section>
   );
 }

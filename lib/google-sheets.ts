@@ -1,4 +1,5 @@
 import { google } from "googleapis";
+import { orderCodeFromSession, normalizePhone } from "./order-code";
 
 function getPrivateKey(): string {
   const key = process.env.GOOGLE_SHEETS_PRIVATE_KEY;
@@ -68,6 +69,45 @@ function parsePrice(value: string | undefined): number {
   return isNaN(n) ? 0 : n;
 }
 
+// Palabras que en un nombre de plato van en minúscula ("Bolón Mixto de la Casa").
+const MINUSCULAS = new Set(["de", "del", "la", "las", "los", "el", "y", "con", "en", "a", "al"]);
+
+/**
+ * Arregla los nombres tecleados TODO en minúsculas ("colonche de chicharrón" →
+ * "Colonche de Chicharrón"). Si el nombre ya trae alguna mayúscula se respeta
+ * tal cual: no es tarea del código reescribir lo que la cocina ha decidido.
+ *
+ * Va aquí, en el punto donde se leen los productos, y no en la tarjeta, para
+ * que el nombre salga igual en la carta, en el correo de confirmación y en la
+ * fila del pedido. Si se arregla solo al pintar, el cliente ve una cosa y la
+ * cocina recibe otra.
+ */
+function nombreBonito(bruto: string): string {
+  const n = (bruto ?? "").trim();
+  if (!n || n !== n.toLowerCase()) return n; // ya tiene mayúsculas → no tocar
+  return n
+    .split(/\s+/)
+    .map((palabra, i) =>
+      i > 0 && MINUSCULAS.has(palabra)
+        ? palabra
+        : palabra.charAt(0).toUpperCase() + palabra.slice(1)
+    )
+    .join(" ");
+}
+
+// La columna de alérgenos se rellena a mano. Hoy se usa la coma y funciona,
+// pero basta que alguien escriba "Pescado · Huevos" para que toda la lista
+// quede dentro de un único elemento del array: en la carta se seguiría viendo
+// bien (se vuelve a unir con " · " para mostrarla) mientras el aviso de
+// alergias del checkout deja de casar nada. Un fallo así no se ve.
+// Por eso se aceptan todos los separadores que alguien pueda teclear.
+function partirAlergenos(celda?: string): string[] {
+  return (celda ?? "")
+    .split(/[,;/·•|\n]+/)
+    .map((a) => a.trim())
+    .filter(Boolean);
+}
+
 export async function getProductsRows(): Promise<ProductRow[]> {
   const rows = await getSheetValues("Products!A2:I");
   return rows
@@ -85,17 +125,24 @@ export async function getProductsRows(): Promise<ProductRow[]> {
       }
       return {
         productId: r[0] ?? "",
-        name: r[1] ?? "",
+        name: nombreBonito(r[1] ?? ""),
         description: r[2] ?? "",
         finalPrice,
         depositAmount,
         available,
-        allergens: r[6] ? r[6].split(",").map((a) => a.trim()).filter(Boolean) : [],
+        allergens: partirAlergenos(r[6]),
         imageUrl: r[7] ?? "",
         category: r[8] ?? "",
       };
-    })
-    .filter((p) => p.available);
+    });
+  // OJO: se devuelven TAMBIÉN las filas con available=FALSE. Antes se filtraban
+  // aquí y eso tenía dos consecuencias malas: (1) un plato agotado desaparecía
+  // de la carta sin dejar rastro, en vez de verse "agotado hoy"; (2) para los
+  // platos que además viven en el catálogo de respaldo del código, quitarlos de
+  // la lista hacía que el código los REINYECTARA como disponibles — marcar
+  // FALSE en la hoja no solo no los ocultaba: los dejaba comprables. Cada
+  // consumidor decide ahora qué hacer con los no disponibles (la carta los
+  // enseña con cartel, el checkout los rechaza con mensaje, /anadir los omite).
 }
 
 // ─── Settings ────────────────────────────────────────────────────────────────
@@ -129,8 +176,12 @@ export async function getSettings(): Promise<Settings> {
     map[keyTrimmed] = (row[1] ?? "").trim();
   }
   return {
-    reservationStartTime: map["reservationStartTime"] ?? "09:00",
-    reservationEndTime: map["reservationEndTime"] ?? "19:00",
+    // La hoja Settings usa las claves `startTime` / `endTime`.
+    // Se mantienen los nombres antiguos como respaldo por compatibilidad.
+    reservationStartTime:
+      map["startTime"] ?? map["reservationStartTime"] ?? "10:00",
+    reservationEndTime:
+      map["endTime"] ?? map["reservationEndTime"] ?? "19:00",
     slotIntervalMinutes: parseInt(map["slotIntervalMinutes"] ?? "60", 10) || 60,
     minLeadDays: parseInt(map["minLeadDays"] ?? "1", 10) || 1,
     currency: map["currency"] ?? "eur",
@@ -253,6 +304,86 @@ export async function findOrderByStripeSessionId(
   return orders.find((o) => o.stripeSessionId === sessionId) ?? null;
 }
 
+// ─── Buscar pedido para AÑADIR (por código, teléfono+fecha o sesión) ───────────
+
+export interface AddOrderContext {
+  found: boolean;
+  sessionId: string;
+  orderCode: string;
+  customerName: string;
+  email: string;
+  phone: string;
+  reservationDate: string;
+  reservationTime: string;
+  deliveryMethod: string;
+}
+
+const EMPTY_ADD_CONTEXT: AddOrderContext = {
+  found: false,
+  sessionId: "",
+  orderCode: "",
+  customerName: "",
+  email: "",
+  phone: "",
+  reservationDate: "",
+  reservationTime: "",
+  deliveryMethod: "",
+};
+
+// Devuelve el contexto de un pedido para poder ampliarlo. Acepta:
+//  - sessionId exacto (uso interno del backend, fuente de verdad)
+//  - code (nº de pedido derivado)
+//  - phone + date (para clientes sin código / pedidos antiguos)
+// Se lee la línea de pedido más reciente que coincida.
+export async function findAddOrderContext(opts: {
+  sessionId?: string;
+  code?: string;
+  phone?: string;
+  date?: string;
+}): Promise<AddOrderContext> {
+  const rows = await getSheetValues("Orders!A2:T");
+  const withSession = rows.filter((r) => (r[2] ?? "").trim());
+
+  let match: string[] | undefined;
+
+  if (opts.sessionId) {
+    const sid = opts.sessionId.trim();
+    match = [...withSession].reverse().find((r) => (r[2] ?? "").trim() === sid);
+  } else if (opts.code) {
+    const code = opts.code.trim().toUpperCase();
+    match = [...withSession]
+      .reverse()
+      .find((r) => orderCodeFromSession((r[2] ?? "").trim()) === code);
+  } else if (opts.phone) {
+    const phone = normalizePhone(opts.phone);
+    const date = opts.date ? normalizeDate(opts.date) : "";
+    if (phone.length >= 6) {
+      match = [...withSession]
+        .reverse()
+        .find(
+          (r) =>
+            normalizePhone(r[5] ?? "") === phone &&
+            (!date || normalizeDate(r[9] ?? "") === date)
+        );
+    }
+  }
+
+  if (!match) return EMPTY_ADD_CONTEXT;
+
+  const sessionId = (match[2] ?? "").trim();
+  return {
+    found: true,
+    sessionId,
+    orderCode: orderCodeFromSession(sessionId),
+    customerName: (match[3] ?? "").trim(),
+    email: (match[4] ?? "").trim(),
+    phone: (match[5] ?? "").trim(),
+    reservationDate: normalizeDate(match[9] ?? ""),
+    reservationTime: normalizeTime(match[10] ?? ""),
+    deliveryMethod: (match[19] ?? "").trim() || "delivery",
+  };
+}
+
 // ─── Append Order ─────────────────────────────────────────────────────────────
 
 export interface OrderRow {
@@ -288,6 +419,20 @@ export interface OrderRow {
   discountAmount: number;
   subtotalBeforeDiscount: number;
   totalAfterDiscount: number;
+  // Origen del cliente (columnas AD–AF). Opcional: vacío si no se conoce.
+  utmSource?: string;
+  utmCampaign?: string;
+  referrer?: string;
+}
+
+/**
+ * Texto escrito por el cliente que va a la hoja con USER_ENTERED: si empieza como una fórmula
+ * (=, @, o +/- seguido de letra o paréntesis) Sheets la ejecutaría. Se antepone ' para que
+ * quede como texto. No se aplica a teléfonos (+34…), que empiezan por + y un número.
+ */
+export function textoSeguro(v: string | null | undefined): string {
+  const s = String(v ?? "");
+  return /^[=@]|^[+\-][\p{L}(]/u.test(s.trimStart()) ? "'" + s : s;
 }
 
 export async function appendOrderToSheet(order: OrderRow): Promise<void> {
@@ -298,7 +443,7 @@ export async function appendOrderToSheet(order: OrderRow): Promise<void> {
     order.createdAt,
     order.status,
     order.stripeSessionId,
-    order.customerName,
+    textoSeguro(order.customerName),
     order.email,
     order.phone,
     order.productId,
@@ -309,9 +454,9 @@ export async function appendOrderToSheet(order: OrderRow): Promise<void> {
     order.finalPrice,
     order.depositPaid,
     order.pendingAmount,
-    order.notes,
-    order.deliveryAddress,
-    order.deliveryDetails,
+    textoSeguro(order.notes),
+    textoSeguro(order.deliveryAddress),
+    textoSeguro(order.deliveryDetails),
     order.postalCode,
     order.deliveryZone,
     order.deliveryMethod,
@@ -326,11 +471,16 @@ export async function appendOrderToSheet(order: OrderRow): Promise<void> {
     order.discountAmount,
     order.subtotalBeforeDiscount,
     order.totalAfterDiscount,
+    // Origen — columnas AD, AE, AF. SIEMPRE al final: el terminal lee por posición cuando
+    // la hoja pierde la cabecera, así que nunca se inserta nada antes de estas.
+    order.utmSource ?? "",
+    order.utmCampaign ?? "",
+    order.referrer ?? "",
   ];
 
   await sheets.spreadsheets.values.append({
     spreadsheetId: getSpreadsheetId(),
-    range: "Orders!A:AC",
+    range: "Orders!A:AF",
     valueInputOption: "USER_ENTERED",
     requestBody: { values: [row] },
   });
@@ -363,5 +513,70 @@ export async function appendWaitlistToSheet(entry: WaitlistRow): Promise<void> {
     range: "Waitlist!A:E",
     valueInputOption: "USER_ENTERED",
     requestBody: { values: [row] },
+  });
+}
+
+// Lee las filas de la lista de espera.
+export async function getWaitlistRows(): Promise<WaitlistRow[]> {
+  const rows = await getSheetValues("Waitlist!A2:E");
+  return rows
+    .filter((r) => r[1] || r[3]) // tiene nombre o teléfono
+    .map((r) => ({
+      createdAt: r[0] ?? "",
+      name: r[1] ?? "",
+      email: r[2] ?? "",
+      phone: r[3] ?? "",
+      message: r[4] ?? "",
+    }));
+}
+
+// ─── Setup admin: abrir días + actualizar horario ──────────────────────────────
+
+// Añade días a la pestaña Availability (isOpen=TRUE, capacidad, no sold out).
+export async function appendAvailabilityDays(
+  days: { date: string; capacity: number }[]
+): Promise<void> {
+  const auth = getAuth();
+  const sheets = google.sheets({ version: "v4", auth });
+  const rows = days.map((d) => [
+    d.date,
+    "TRUE",
+    String(d.capacity),
+    "FALSE",
+    "Disponible",
+  ]);
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: getSpreadsheetId(),
+    range: "Availability!A:E",
+    valueInputOption: "USER_ENTERED",
+    requestBody: { values: rows },
+  });
+}
+
+// Actualiza (o crea) una clave de la pestaña Settings (columna B = valor).
+export async function updateSetting(key: string, value: string): Promise<void> {
+  const auth = getAuth();
+  const sheets = google.sheets({ version: "v4", auth });
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: getSpreadsheetId(),
+    range: "Settings!A:A",
+  });
+  const keys = res.data.values ?? [];
+  const idx = keys.findIndex((r) => (r[0] ?? "").trim() === key);
+  if (idx === -1) {
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: getSpreadsheetId(),
+      range: "Settings!A:B",
+      valueInputOption: "USER_ENTERED",
+      requestBody: { values: [[key, value]] },
+    });
+    return;
+  }
+  const sheetRow = idx + 1; // values.get A:A → índice 0 = fila 1
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: getSpreadsheetId(),
+    range: `Settings!B${sheetRow}`,
+    valueInputOption: "USER_ENTERED",
+    requestBody: { values: [[value]] },
   });
 }

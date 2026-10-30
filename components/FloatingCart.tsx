@@ -1,0 +1,63 @@
+"use client";
+import { useEffect, useState } from "react";
+
+interface CartState {
+  items: number;
+  total: number;
+}
+
+export default function FloatingCart({ onOpen }: { onOpen?: () => void }) {
+  const [cart, setCart] = useState<CartState>({ items: 0, total: 0 });
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    function onUpdate(e: Event) {
+      const detail = (e as CustomEvent<CartState>).detail;
+      setCart(detail);
+      setVisible(detail.items > 0);
+    }
+    window.addEventListener("verde:cart:update", onUpdate);
+    return () => window.removeEventListener("verde:cart:update", onUpdate);
+  }, []);
+
+  function fmt(n: number) { return n.toFixed(2).replace(".", ",") + " €"; }
+
+  if (!visible) return null;
+
+  return (
+    <div
+      onClick={() => {
+        onOpen?.();
+        // Abre el paso 1 y baja a "Tu selección" — lo hace ReservationForm, que
+        // es quien sabe dónde está el panel. Aquí no se desplaza nada más para
+        // no pelearse con ese scroll.
+        window.dispatchEvent(new CustomEvent("verde:cart:open"));
+      }}
+      className="fixed bottom-6 right-6 z-[999] flex items-center gap-3 px-5 py-3 rounded-xl cursor-pointer transition-all duration-200 hover:-translate-y-1"
+      style={{
+        background: "#1c3a10",
+        boxShadow: "0 8px 40px rgba(28,58,16,0.4)",
+        minWidth: 190,
+      }}
+    >
+      <span style={{ fontSize: "1.1rem" }}>🛒</span>
+      <div style={{ flex: 1 }}>
+        <div className="text-[11px]" style={{ color: "rgba(245,240,232,0.6)" }}>
+          {cart.items} {cart.items === 1 ? "producto" : "productos"}
+        </div>
+        <div className="font-mono font-bold text-base" style={{ color: "#f2ead8" }}>
+          {fmt(cart.total)}
+        </div>
+        <div className="text-[9px]" style={{ color: "rgba(245,240,232,0.45)" }}>
+          IVA incluido
+        </div>
+      </div>
+      <span
+        className="text-[10px] font-semibold uppercase tracking-[0.12em]"
+        style={{ color: "rgba(245,240,232,0.55)" }}
+      >
+        Ver / editar
+      </span>
+    </div>
+  );
+}

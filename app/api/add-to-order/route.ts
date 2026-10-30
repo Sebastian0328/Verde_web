@@ -1,0 +1,231 @@
+import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
+import { stripe } from "@/lib/stripe";
+import { getProductById, estaAgotadoTemporal, agotadoParaFecha } from "@/lib/products";
+import { comprobarStockCarrito } from "@/lib/stock";
+import {
+  getProductsRows,
+  getSettings,
+  findAddOrderContext,
+  getOrdersRows,
+} from "@/lib/google-sheets";
+import { SOLD_OUT } from "@/lib/store-config";
+import { trocearMeta, ErrorCliente } from "@/lib/stripe-meta";
+
+const addSchema = z.object({
+  sessionId: z.string().min(6),
+  items: z
+    .array(
+      z.object({
+        productId: z.string().min(1),
+        quantity: z.number().int().min(1).max(20),
+      })
+    )
+    .min(1, "Añade al menos un producto"),
+});
+
+export async function POST(req: NextRequest) {
+  try {
+    if (SOLD_OUT) {
+      return NextResponse.json(
+        { error: "Estamos completos ahora mismo." },
+        { status: 403 }
+      );
+    }
+
+    const parsed = addSchema.parse(await req.json());
+
+    // Pedido original (fuente de verdad: fecha/hora/cliente salen de aquí)
+    const ctx = await findAddOrderContext({ sessionId: parsed.sessionId });
+    if (!ctx.found) {
+      return NextResponse.json(
+        { error: "No encontramos tu pedido." },
+        { status: 404 }
+      );
+    }
+
+    // Solo se puede ampliar mientras el pedido no sea de hoy o de un día pasado.
+    const today = new Date().toISOString().slice(0, 10);
+    if (ctx.reservationDate <= today) {
+      return NextResponse.json(
+        {
+          error:
+            "Ya no se puede añadir a este pedido (es de hoy o ya pasó). Escríbenos por WhatsApp.",
+        },
+        { status: 403 }
+      );
+    }
+
+    const settings = await getSettings();
+
+    // Validar productos (Google Sheets primero, estático de respaldo)
+    let sheetsProducts: Awaited<ReturnType<typeof getProductsRows>> = [];
+    try {
+      sheetsProducts = await getProductsRows();
+    } catch {
+      // respaldo estático
+    }
+
+    const validatedItems = parsed.items.map((item) => {
+      // Mismo guard que el checkout: los agotados temporales viven en código,
+      // la hoja sigue en TRUE y aquí también hay que cortarlos.
+      if (estaAgotadoTemporal(item.productId)) {
+        throw new ErrorCliente(
+          "Uno de los platos se ha agotado hoy. Quítalo para continuar."
+        );
+      }
+      // Sin stock para la fecha de entrega del pedido (p. ej. bolón solo mañana).
+      if (agotadoParaFecha(item.productId, ctx.reservationDate)) {
+        throw new ErrorCliente(
+          "Uno de los platos no está disponible para el día de tu pedido. Quítalo para continuar."
+        );
+      }
+      const sheetProduct = sheetsProducts.find(
+        (p) => p.productId === item.productId
+      );
+      if (sheetProduct) {
+        if (!sheetProduct.available)
+          throw new ErrorCliente(`${sheetProduct.name} no está disponible`);
+        return {
+          product: {
+            id: sheetProduct.productId,
+            name: sheetProduct.name,
+            finalPrice: sheetProduct.finalPrice,
+            depositAmount: sheetProduct.depositAmount,
+          },
+          quantity: item.quantity,
+        };
+      }
+      const staticProduct = getProductById(item.productId);
+      if (!staticProduct)
+        throw new ErrorCliente(`Producto ${item.productId} no encontrado`);
+      if (!staticProduct.available)
+        throw new ErrorCliente(`${staticProduct.name} no está disponible`);
+      return {
+        product: {
+          id: staticProduct.id,
+          name: staticProduct.name,
+          finalPrice: staticProduct.finalPrice,
+          depositAmount: staticProduct.depositAmount,
+        },
+        quantity: item.quantity,
+      };
+    });
+
+    // Stock TOTAL limitado: lo que se añade cuenta contra lo que queda del cupo.
+    try {
+      const ordenes = await getOrdersRows();
+      const errorStock = comprobarStockCarrito(parsed.items, ordenes);
+      if (errorStock) throw new ErrorCliente(errorStock);
+    } catch (e) {
+      if (e instanceof ErrorCliente) throw e;
+      // Si no se pueden leer los pedidos, no bloqueamos la ampliación por ello.
+    }
+
+    const totalItems = validatedItems.reduce((s, { quantity }) => s + quantity, 0);
+    const productsSubtotal = validatedItems.reduce(
+      (s, { product, quantity }) => s + product.depositAmount * quantity,
+      0
+    );
+
+    // Sin envío (mismo reparto) y sin promo en ampliaciones.
+    const chargeTotal = productsSubtotal;
+    if (chargeTotal < 0.5) {
+      return NextResponse.json(
+        { error: "Importe demasiado bajo." },
+        { status: 400 }
+      );
+    }
+
+    const appUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+    const acceptedAt = new Date().toISOString();
+
+    const productSummary = validatedItems
+      .map(({ product, quantity }) => `${product.name} ×${quantity}`)
+      .join(", ");
+
+    const itemsMeta = JSON.stringify(
+      validatedItems.map(({ product, quantity }) => ({
+        id: product.id,
+        name: product.name,
+        qty: quantity,
+        price: product.finalPrice,
+        deposit: product.depositAmount,
+      }))
+    );
+
+    const session = await stripe.checkout.sessions.create({
+      mode: "payment",
+      line_items: [
+        {
+          price_data: {
+            currency: settings.currency,
+            unit_amount: Math.round(chargeTotal * 100),
+            product_data: {
+              name: `Ampliación · pedido ${ctx.orderCode}`,
+              description: productSummary,
+            },
+          },
+          quantity: 1,
+        },
+      ],
+      metadata: {
+        // Troceado: ver lib/stripe-meta.ts — un carrito grande no cabe en una clave.
+        ...trocearMeta("items", itemsMeta),
+        reservationDate: ctx.reservationDate,
+        reservationTime: ctx.reservationTime,
+        customerName: ctx.customerName,
+        email: ctx.email,
+        phone: ctx.phone,
+        notes: `Ampliación del pedido ${ctx.orderCode}`,
+        deliveryMethod: ctx.deliveryMethod,
+        deliveryAddress: "",
+        deliveryDetails: "",
+        postalCode: "",
+        deliveryZone: "",
+        totalItems: String(totalItems),
+        totalFinal: String(productsSubtotal),
+        totalDeposit: String(chargeTotal),
+        totalPending: "0",
+        deliveryFee: "0",
+        deliveryZoneLevel: "",
+        privacyAccepted: "true",
+        termsAccepted: "true",
+        acceptedAt,
+        // Marca de ampliación (el webhook salta la comprobación de cupo)
+        isAddon: "true",
+        parentSessionId: ctx.sessionId,
+        // Sin promoción en ampliaciones
+        promoApplied: "false",
+        promoName: "",
+        promoType: "",
+        promoValue: "0",
+        discountAmount: "0",
+        subtotalBeforeDiscount: String(chargeTotal),
+        totalAfterDiscount: String(chargeTotal),
+      },
+      customer_email: ctx.email || undefined,
+      success_url: `${appUrl}/gracias?session_id={CHECKOUT_SESSION_ID}&added=1`,
+      cancel_url: `${appUrl}/anadir`,
+    });
+
+    return NextResponse.json({ url: session.url });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return NextResponse.json({ error: "Datos inválidos." }, { status: 422 });
+    }
+    // Igual que en el checkout: al cliente solo los mensajes escritos para él.
+    if (error instanceof ErrorCliente) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+    console.error("[add-to-order]", error);
+    return NextResponse.json(
+      {
+        error:
+          "No hemos podido añadir esto a tu pedido. Inténtalo de nuevo; " +
+          "si sigue fallando, escríbenos por WhatsApp.",
+      },
+      { status: 500 }
+    );
+  }
+}

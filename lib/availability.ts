@@ -4,6 +4,7 @@ import {
   getSlotOverridesRows,
   getOrdersRows,
 } from "./google-sheets";
+import { SOLD_OUT } from "./store-config";
 
 // Normalizes "9:00" → "09:00", "9:5" → "09:05", already-padded values unchanged
 export function normalizeTime(t: string): string {
@@ -31,6 +32,49 @@ export interface DayAvailability {
   slots: TimeSlot[];
 }
 
+// Horas que NO se ofrecen para reservar. Editar aquí. 14:00 = hueco de comida.
+const BLOCKED_TIMES = ["14:00"];
+
+// Cupos especiales por HORA, recurrentes todos los días (el resto de horas
+// usa el cupo del día — col C del Sheet — o el por defecto). Pedido de Amos
+// (02-09): a las 10:00 entra UN solo pedido; la franja no se cierra.
+const CAPACITY_BY_TIME: Record<string, number> = { "10:00": 1 };
+
+// Capacidad por slot por defecto: 1 pedido por hora (régimen de Amos desde el
+// 23-10; antes eran 2). Aplica a todos los días. La columna C de la pestaña
+// Availability lo sobreescribe por día, y SlotOverrides por franja concreta.
+const DEFAULT_MAX_ORDERS_PER_SLOT = 1;
+
+// Desde el 01-09 se abre TODOS los días: un día futuro sin fila en la pestaña
+// Availability se ofrece abierto con el cupo por defecto, dentro de esta
+// ventana rodante. La hoja pasa a ser el override — sirve para CERRAR un día
+// (open=FALSE, como el 09/10-09), marcar sold out manual, poner nota o cupo
+// especial — y ya no hay que abrir filas cada mes.
+const DEFAULT_OPEN_DAYS_AHEAD = 30;
+
+// Días de cierre semanal fijo de Verde (getUTCDay: 0=domingo, 1=lunes,
+// 2=martes…). Un día de estos se ofrece CERRADO por defecto — no hay que
+// marcarlo en la hoja cada semana. La fila explícita en Availability sigue
+// mandando: un lunes/martes con isOpen=TRUE en la hoja abriría igual (excepción).
+const DIAS_CIERRE_SEMANAL: number[] = [1, 2]; // lunes y martes
+
+// Cierre anticipado por día de la semana (getUTCDay: 0=domingo…): hora del
+// ÚLTIMO pedido de ese día, distinta del endTime global de Settings. El resto de
+// días usa el endTime global. Domingo: última franja a las 13:00 (cierra después).
+const ENDTIME_POR_DIA: Record<number, string> = { 0: "13:00" };
+
+const NOMBRE_DIA: Record<number, string> = {
+  0: "domingo", 1: "lunes", 2: "martes", 3: "miércoles",
+  4: "jueves", 5: "viernes", 6: "sábado",
+};
+// T12:00:00Z fija el día de forma estable, sin depender del huso local.
+function diaSemanaDe(iso: string): number {
+  return new Date(iso + "T12:00:00Z").getUTCDay();
+}
+function esDiaCierreSemanal(iso: string): boolean {
+  return DIAS_CIERRE_SEMANAL.includes(diaSemanaDe(iso));
+}
+
 export function buildTimeSlots(
   startTime: string,
   endTime: string,
@@ -44,13 +88,16 @@ export function buildTimeSlots(
   while (current <= end) {
     const h = Math.floor(current / 60).toString().padStart(2, "0");
     const m = (current % 60).toString().padStart(2, "0");
-    slots.push(`${h}:${m}`);
+    const slot = `${h}:${m}`;
+    if (!BLOCKED_TIMES.includes(slot)) slots.push(slot);
     current += intervalMinutes;
   }
   return slots;
 }
 
 export async function getAvailabilityDays(): Promise<DayAvailability[]> {
+  if (SOLD_OUT) return []; // sold out general → sin fechas disponibles
+
   const [settings, availRows, overrides, orders] = await Promise.all([
     getSettings(),
     getAvailabilityRows(),
@@ -76,7 +123,28 @@ export async function getAvailabilityDays(): Promise<DayAvailability[]> {
       quantity: Number(o.quantity) || 0,
     }));
 
-  return availRows.map((day): DayAvailability => {
+  // Días abiertos por defecto: se rellenan los huecos de la ventana rodante
+  // que no tengan fila propia en la hoja (la fila, si existe, manda).
+  const fechasConFila = new Set(availRows.map((r) => normalizeDate(r.date)));
+  const allDays = [...availRows];
+  for (let i = 1; i <= DEFAULT_OPEN_DAYS_AHEAD; i++) {
+    const d = new Date();
+    d.setDate(d.getDate() + i);
+    const iso = d.toISOString().slice(0, 10);
+    if (!fechasConFila.has(iso)) {
+      const cerradoSemanal = esDiaCierreSemanal(iso);
+      allDays.push({
+        date: iso,
+        isOpen: !cerradoSemanal, // lunes y martes (cierre fijo) nacen cerrados
+        maxOrdersPerSlot: 0, // 0 → cae al cupo por defecto
+        manuallySoldOut: false,
+        note: cerradoSemanal ? `Cerrado (${NOMBRE_DIA[diaSemanaDe(iso)]})` : "",
+      });
+    }
+  }
+  allDays.sort((a, b) => normalizeDate(a.date).localeCompare(normalizeDate(b.date)));
+
+  return allDays.map((day): DayAvailability => {
     const dayDate = normalizeDate(day.date);
 
     if (dayDate <= today) {
@@ -91,7 +159,14 @@ export async function getAvailabilityDays(): Promise<DayAvailability[]> {
       return { date: dayDate, status: "sold_out", note: day.note, slots: [] };
     }
 
-    const slots: TimeSlot[] = timeSlots.map((time) => {
+    // Cierre anticipado por día de la semana (p. ej. domingo hasta 13:00). Si el
+    // día tiene endTime propio, se recalculan sus franjas; si no, usa el global.
+    const endDia = ENDTIME_POR_DIA[diaSemanaDe(dayDate)];
+    const slotsDelDia = endDia
+      ? buildTimeSlots(settings.reservationStartTime, endDia, settings.slotIntervalMinutes)
+      : timeSlots;
+
+    const slots: TimeSlot[] = slotsDelDia.map((time) => {
       const normTime = normalizeTime(time);
 
       const override = overrides.find(
@@ -102,15 +177,26 @@ export async function getAvailabilityDays(): Promise<DayAvailability[]> {
         return { time: normTime, status: "sold_out", remaining: 0 };
       }
 
+      const dayCapacity =
+        day.maxOrdersPerSlot > 0
+          ? day.maxOrdersPerSlot
+          : DEFAULT_MAX_ORDERS_PER_SLOT;
+      // Prioridad: override puntual del Sheet (fecha+hora) → cupo recurrente
+      // por hora → cupo del día.
       const capacity =
         override?.maxOrdersOverride != null
           ? override.maxOrdersOverride
-          : day.maxOrdersPerSlot;
+          : CAPACITY_BY_TIME[normTime] ?? dayCapacity;
 
       const matchedOrders = paidOrders.filter(
         (o) => o.reservationDate === dayDate && o.reservationTime === normTime
       );
-      const usedCapacity = matchedOrders.reduce((sum, o) => sum + o.quantity, 0);
+      // El cupo cuenta PEDIDOS, no líneas: la hoja escribe una fila por plato
+      // (+ la línea de envío), así que sumar cantidades vaciaba la franja con
+      // un solo pedido de 2+ productos (bug real: 1 pedido de 3 líneas dejaba
+      // "sold out" una franja con cupo 2). Un pedido = una sesión de Stripe.
+      const usedCapacity = new Set(matchedOrders.map((o) => o.stripeSessionId))
+        .size;
       const remaining = Math.max(0, capacity - usedCapacity);
 
       if (process.env.NODE_ENV === "development") {

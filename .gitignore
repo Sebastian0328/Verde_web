@@ -30,3 +30,21 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+.env*
+
+# test / QA artifacts
+.playwright-mcp/
+/mobile-calendar.png
+/soldout.png
+/gate-*.png
+/calendario-*.png
+/waitlist*.csv
+
+# Fotos crudas de productos (WeTransfer) — solo se versionan las optimizadas .jpg
+public/productos/wetransfer_*
+public/productos/*.zip
+public/productos/.DS_Store
+
+# Documentación interna: nombres de socios y avisos societarios. El repo es
+# público, así que este contexto vive solo en local / en el vault.
+/CONTEXTO_*.md

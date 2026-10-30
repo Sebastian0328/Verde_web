@@ -7,12 +7,19 @@ import {
   Hr,
 } from "@react-email/components";
 import React from "react";
+import { PICKUP_ADDRESS } from "../lib/store-config";
+import { vatBreakdown, formatCents, ratePercent } from "../lib/vat";
+import { formatDeliveryWindow } from "../lib/delivery-window";
+
+// IVA que ya incluye el total (informativo). Toda la carta actual va al 10 %.
+const EMAIL_VAT_RATE = 0.10;
 
 // ─── Shared types (mirror of lib/email OrderItem, no circular import) ───────
 interface OrderItem {
   productName: string;
   quantity: number;
   finalPrice: number;
+  allergens?: string[];
 }
 
 export interface CustomerReservationEmailProps {
@@ -30,6 +37,7 @@ export interface CustomerReservationEmailProps {
   subtotalBeforeDiscount?: number;
   discountAmount?: number;
   promoName?: string;
+  orderCode?: string;
 }
 
 // ─── Brand palette ───────────────────────────────────────────────────────────
@@ -119,6 +127,7 @@ export function CustomerReservationEmail({
   subtotalBeforeDiscount,
   discountAmount,
   promoName,
+  orderCode,
 }: CustomerReservationEmailProps) {
   const isDelivery = !deliveryMethod || deliveryMethod === "delivery";
   const hasDiscount = !!discountAmount && discountAmount > 0;
@@ -127,7 +136,7 @@ export function CustomerReservationEmail({
     <Html lang="es">
       <Head />
       <Preview>
-        Pedido confirmado en Verde — {reservationDate} · {reservationTime}
+        Pedido confirmado en Verde — {reservationDate} · {formatDeliveryWindow(reservationTime)}
       </Preview>
       <Body
         style={{
@@ -248,6 +257,17 @@ export function CustomerReservationEmail({
                           >
                             {item.productName}{" "}
                             <span style={{ color: V.gris }}>×{item.quantity}</span>
+                            {item.allergens && item.allergens.length > 0 && (
+                              <div
+                                style={{
+                                  fontSize: "11px",
+                                  color: V.gris,
+                                  marginTop: "2px",
+                                }}
+                              >
+                                Alérgenos: {item.allergens.join(", ")}
+                              </div>
+                            )}
                           </td>
                           <td
                             style={{
@@ -263,6 +283,19 @@ export function CustomerReservationEmail({
                       ))}
                     </tbody>
                   </table>
+
+                  <p
+                    style={{
+                      fontSize: "11px",
+                      color: V.gris,
+                      lineHeight: 1.5,
+                      margin: "8px 0 0",
+                    }}
+                  >
+                    ⚠️ Puede contener trazas de cacahuete y frutos secos.
+                    Información orientativa; ante una alergia grave, contáctanos
+                    antes de tu próximo pedido.
+                  </p>
 
                 </td>
               </tr>
@@ -282,7 +315,7 @@ export function CustomerReservationEmail({
                   <table width="100%" cellPadding={0} cellSpacing={0}>
                     <tbody>
                       <Row label="Fecha" value={reservationDate} />
-                      <Row label="Hora" value={reservationTime} />
+                      <Row label={isDelivery ? "Entrega" : "Recogida"} value={formatDeliveryWindow(reservationTime)} />
                       {isDelivery ? (
                         <>
                           <Row label="Dirección de entrega" value={deliveryAddress || "—"} />
@@ -292,7 +325,10 @@ export function CustomerReservationEmail({
                           )}
                         </>
                       ) : (
-                        <Row label="Entrega" value="Recogida en local" />
+                        <>
+                          <Row label="Entrega" value="Recogida en local" />
+                          <Row label="Recoges en" value={PICKUP_ADDRESS} />
+                        </>
                       )}
                     </tbody>
                   </table>
@@ -328,11 +364,116 @@ export function CustomerReservationEmail({
                       {pendingAmount > 0 && (
                         <Row label="Pendiente" value={`${pendingAmount} €`} />
                       )}
+                      {/* Desglose de IVA — informativo, ya incluido en el total */}
+                      {(() => {
+                        const iva = vatBreakdown([
+                          { gross: Math.round(depositPaid * 100), rate: EMAIL_VAT_RATE },
+                        ]);
+                        return (
+                          <>
+                            <Row
+                              label="Base imponible"
+                              value={`${formatCents(iva.baseTotal)} €`}
+                            />
+                            {iva.groups.map((g) => (
+                              <Row
+                                key={g.rate}
+                                label={`IVA (${ratePercent(g.rate)} %)`}
+                                value={`${formatCents(g.vat)} €`}
+                              />
+                            ))}
+                          </>
+                        );
+                      })()}
                     </tbody>
                   </table>
+                  <p
+                    style={{
+                      margin: "8px 0 0 0",
+                      fontSize: "11px",
+                      color: V.gris,
+                      lineHeight: "1.5",
+                    }}
+                  >
+                    Este es un resumen de tu pedido, no una factura.
+                  </p>
 
                 </td>
               </tr>
+
+              {/* ── Añadir a tu pedido ── */}
+              {orderCode && (
+                <tr>
+                  <td style={{ padding: "20px 32px 0 32px" }}>
+                    <table
+                      width="100%"
+                      cellPadding={0}
+                      cellSpacing={0}
+                      style={{
+                        background: "rgba(80,146,52,0.08)",
+                        borderRadius: "10px",
+                      }}
+                    >
+                      <tbody>
+                        <tr>
+                          <td style={{ padding: "18px 20px" }}>
+                            <p
+                              style={{
+                                margin: "0 0 4px 0",
+                                fontSize: "11px",
+                                fontWeight: "bold",
+                                letterSpacing: "1.5px",
+                                textTransform: "uppercase",
+                                color: V.verde,
+                              }}
+                            >
+                              ¿Se te olvidó algo?
+                            </p>
+                            <p
+                              style={{
+                                margin: "0 0 14px 0",
+                                fontSize: "13px",
+                                color: "#555",
+                                lineHeight: "1.5",
+                              }}
+                            >
+                              Puedes añadir más cosas a este pedido hasta el día
+                              antes. Solo pagas lo nuevo.
+                            </p>
+                            <a
+                              href={`https://www.verdemadrid.com/anadir?codigo=${orderCode}`}
+                              style={{
+                                display: "inline-block",
+                                background: V.platano,
+                                color: "#ffffff",
+                                fontWeight: "bold",
+                                fontSize: "13px",
+                                textDecoration: "none",
+                                padding: "11px 22px",
+                                borderRadius: "8px",
+                              }}
+                            >
+                              ➕ Añadir a tu pedido
+                            </a>
+                            <p
+                              style={{
+                                margin: "12px 0 0 0",
+                                fontSize: "12px",
+                                color: "#888",
+                              }}
+                            >
+                              Tu nº de pedido:{" "}
+                              <b style={{ color: "#555", letterSpacing: "1px" }}>
+                                {orderCode}
+                              </b>
+                            </p>
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </td>
+                </tr>
+              )}
 
               {/* Divider */}
               <tr>
@@ -363,7 +504,20 @@ export function CustomerReservationEmail({
                       lineHeight: "1.5",
                     }}
                   >
-                    Si tienes alguna duda, responde este correo y te atendemos.
+                    Si tienes alguna duda, responde este correo o escríbenos por
+                    WhatsApp:
+                  </p>
+                  <p style={{ margin: "6px 0 0 0", fontSize: "14px" }}>
+                    <a
+                      href="https://www.verdemadrid.com/wa"
+                      style={{
+                        color: V.platano,
+                        fontWeight: "bold",
+                        textDecoration: "none",
+                      }}
+                    >
+                      📲 WhatsApp · +34 605 442 809
+                    </a>
                   </p>
                 </td>
               </tr>

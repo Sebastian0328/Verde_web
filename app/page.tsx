@@ -1,25 +1,54 @@
-import Image from "next/image";
-import { getAvailableProducts } from "@/lib/products";
-import { getProductsRows, getSettings } from "@/lib/google-sheets";
-import { storeConfig } from "@/lib/store-config";
+import {
+  getAvailableProducts,
+  getPacks,
+  getSalsas,
+  withExtraProducts,
+  getDestacados,
+  mismoId,
+} from "@/lib/products";
+import { getProductsRows, getSettings, getOrdersRows } from "@/lib/google-sheets";
+import { stockRestante } from "@/lib/stock";
+import { storeConfig, SOLD_OUT } from "@/lib/store-config";
+import { getLaunchPhase, EARLY_ACCESS_CODE, PUBLIC_OPEN_AT } from "@/lib/launch";
+import Countdown from "@/components/Countdown";
 import { getActivePromotion } from "@/lib/promotions";
 import type { ActivePromotion } from "@/lib/promotions";
-import HowItWorks from "@/components/HowItWorks";
+import { getActiveWeekendOffer } from "@/lib/offers";
 import ReservationForm from "@/components/ReservationForm";
+import { getDirectoStatus } from "@/lib/directo";
 import ClosedState from "@/components/ClosedState";
+import MenuShowcase from "@/components/MenuShowcase";
+import Packs from "@/components/Packs";
+import CategoryBar from "@/components/CategoryBar";
+import ZoneMap from "@/components/ZoneMap";
+import Reviews from "@/components/Reviews";
+import ContactHelp from "@/components/ContactHelp";
+import FloatingCart from "@/components/FloatingCart";
+import VentanaLunes from "@/components/VentanaLunes";
 import type { Product } from "@/lib/products";
+import Image from "next/image";
 
 export const dynamic = "force-dynamic";
 
-export default async function HomePage() {
+export default async function HomePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+}) {
+  // Piloto "en directo": ?directo=preview lo fuerza abierto para probarlo en la
+  // preview antes del miércoles. En la ventana real (mié-vie) se abre solo.
+  const sp = await searchParams;
+  const directoStatus = getDirectoStatus(sp.directo === "preview");
   let products: Product[] = getAvailableProducts();
   let reservationsOpen = storeConfig.reservationsOpen;
   let activePromotion: ActivePromotion | null = null;
+  let orders: { productId: string; quantity: number; status: string }[] = [];
 
   try {
-    const [sheetsProducts, settings] = await Promise.all([
+    const [sheetsProducts, settings, ordersRows] = await Promise.all([
       getProductsRows(),
       getSettings(),
+      getOrdersRows(),
     ]);
     if (sheetsProducts.length > 0) {
       products = sheetsProducts.map((p) => ({
@@ -32,8 +61,10 @@ export default async function HomePage() {
         allergens: p.allergens,
         image: p.imageUrl || undefined,
         category: p.category || undefined,
+        isPack: (p.category || "").trim().toLowerCase() === "pack",
       }));
     }
+    orders = ordersRows;
     reservationsOpen = settings.reservationsOpen;
     const promo = getActivePromotion(settings);
     if (promo.isActive) activePromotion = promo;
@@ -41,58 +72,111 @@ export default async function HomePage() {
     // fallback to static config/products
   }
 
+  // Productos de la carta definidos en código (bebidas + platos): se inyectan
+  // en su bloque sin alterar el orden del resto. Si el Sheet trae el mismo id,
+  // manda el Sheet.
+  products = withExtraProducts(products);
+
+  // Stock TOTAL limitado (edición limitada): resta lo vendido del cupo. Al
+  // llegar a 0, el plato se agota. stockRemaining alimenta el badge "quedan X".
+  products = products.map((p) => {
+    const restante = stockRestante(p.id, orders);
+    if (restante == null) return p;
+    return { ...p, stockRemaining: restante, available: p.available && restante > 0 };
+  });
+
+  // SOLD OUT general (cierre del mes) — anula cualquier valor del Sheet.
+  if (SOLD_OUT) reservationsOpen = false;
+
+  const launchPhase = getLaunchPhase();
+  const weekendOffer = getActiveWeekendOffer();
   const config = { ...storeConfig, reservationsOpen };
 
   return (
     <>
-      {/* Hero — imagen arranca desde top:0, detrás del nav fijo */}
-      <section className="relative min-h-screen flex flex-col items-center justify-center px-6 pb-16 text-center">
-        <Image
-          src="/Fondo_Home.png"
-          alt=""
-          fill
-          className="object-cover object-center"
-          priority
+      {/* ── HERO ── */}
+      <section
+        className="relative flex items-center justify-center overflow-hidden w-full"
+        style={{ minHeight: "92vh" }}
+      >
+        {/* Fondo con imagen */}
+        <Image src="/Fondo_Home.png" alt="" fill className="object-cover object-center" priority />
+        <div className="absolute inset-0" style={{ background: "rgba(0,0,0,0)" }} />
+        {/* Textura grain */}
+        <div
+          className="absolute inset-0 pointer-events-none"
+          style={{
+            opacity: 0.06,
+            backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")`,
+            backgroundSize: "180px",
+          }}
         />
-        {/* Overlay sutil para mejorar contraste del texto */}
-        <div className="absolute inset-0 bg-negro/25" />
+        {/* Contenido */}
+        <div className="relative z-10 text-center px-8 max-w-[680px] mx-auto w-full">
+          {/* Eyebrow */}
+          <span
+            className="inline-block font-mono text-[0.68rem] tracking-[0.22em] uppercase mb-6 px-[14px] py-[5px] rounded-full"
+            style={{
+              color: "rgba(255,255,255,0.45)",
+              border: "1px solid rgba(255,255,255,0.12)",
+            }}
+          >
+            Cocina ecuatoriana · Madrid
+          </span>
 
-        {/* pt-16 empuja el contenido por debajo del nav fijo (~64px) */}
-        <div className="relative z-10 max-w-xs mx-auto flex flex-col items-center pt-16">
-          <p className="animate-fade-in text-crema/60 text-[10px] font-medium tracking-[0.45em] uppercase mb-4">
-            Madrid · Dark Kitchen
-          </p>
-
-          <div className="animate-fade-in animation-delay-100 flex justify-center mb-4">
+          {/* Logo principal */}
+          <div className="flex justify-center mb-6">
             <Image
               src="/iconVerde.png"
               alt="Verde"
-              width={180}
-              height={180}
+              width={110}
+              height={110}
               priority
+              style={{ filter: "drop-shadow(0 4px 12px rgba(0,0,0,0.5))", opacity: 1 }}
             />
           </div>
 
-          <p className="animate-fade-in animation-delay-200 text-crema text-base font-normal leading-snug mb-1">
-            Realiza tus pedidos con antelación.
+          <p className="font-caveat text-[1.4rem] leading-tight mb-10" style={{color:"rgba(255,255,255,0.7)"}}>
+            Hecha a mano · Exportación latina
           </p>
 
-          <p className="animate-fade-in animation-delay-200 text-crema/70 text-sm mb-6">
-            Haz tu pedido por reserva y paga online de forma segura.
-          </p>
+          {/* Countdown a la apertura al público (solo en fase de lista) */}
+          {reservationsOpen && launchPhase === "early_access" && (
+            <div className="mb-10">
+              <Countdown
+                target={PUBLIC_OPEN_AT}
+                label="Abrimos al público en"
+                finishedLabel="¡Ya estamos abiertos! 🌱"
+                variant="hero"
+              />
+            </div>
+          )}
 
-          <div className="animate-fade-in animation-delay-300 w-full">
+          {/* CTAs */}
+          <div className="flex gap-4 justify-center flex-wrap">
             {reservationsOpen ? (
-              <a
-                href="#reservar"
-                className="inline-block w-full bg-crema text-verde-bosque text-[11px] font-bold tracking-[0.25em] uppercase px-10 py-5 hover:bg-oro hover:text-negro transition-all duration-300 shadow-lg"
-              >
-                Hacer mi reserva
-              </a>
+              <>
+                <a
+                  href="#packs"
+                  className="px-8 py-[14px] rounded-[10px] text-[0.9rem] font-medium tracking-[0.05em] text-white transition-all bg-[#c85a2a] shadow-terra hover:bg-[#d96535] hover:-translate-y-0.5"
+                >
+                  Ver ofertas del día
+                </a>
+                <a
+                  href="#reservar"
+                  className="px-7 py-[14px] rounded-[10px] text-[0.9rem] font-normal transition-all bg-white/[0.08] text-white/80 border border-white/[0.18] backdrop-blur-[4px] hover:bg-white/[0.14] hover:text-white"
+                >
+                  Ver la carta completa
+                </a>
+              </>
             ) : (
               <a
                 href="#waitlist"
-                className="inline-block w-full bg-oro text-negro text-[11px] font-bold tracking-[0.25em] uppercase px-10 py-5 hover:bg-crema transition-all duration-300 shadow-lg"
+                className="px-10 py-[14px] rounded-[10px] text-[0.9rem] font-medium tracking-[0.05em] transition-all"
+                style={{
+                  background: "var(--gold)",
+                  color: "var(--dark)",
+                }}
               >
                 Avisarme cuando abra
               </a>
@@ -100,24 +184,75 @@ export default async function HomePage() {
           </div>
         </div>
 
-        <div className="absolute bottom-8 left-1/2 -translate-x-1/2 text-crema/30 animate-bounce z-10" aria-hidden="true">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="6 9 12 15 18 9" />
-          </svg>
+        {/* Scroll indicator */}
+        <div
+          className="absolute bottom-7 left-1/2 -translate-x-1/2 flex flex-col items-center gap-1.5 pointer-events-none"
+          style={{ color: "rgba(255,255,255,0.25)" }}
+          aria-hidden="true"
+        >
+          <span className="font-mono text-[0.65rem] tracking-[0.15em] uppercase">scroll</span>
+          <div style={{ width: 1, height: 28, background: "rgba(255,255,255,0.15)" }} />
         </div>
       </section>
 
-      {/* Cómo funciona */}
-      <HowItWorks />
+      {/* ── PACKS ── */}
+      {reservationsOpen && (
+        <section id="packs">
+          <Packs
+            destacados={getDestacados(products)}
+            menuSemana={products.find(
+              (p) => mismoId(p.id, "menu-semana") && p.available !== false
+            )}
+          />
+        </section>
+      )}
 
-      {/* Reserva o estado cerrado */}
+      {/* ── BARRA DE CATEGORÍAS ── */}
+      {reservationsOpen && <CategoryBar />}
+
+      {/* ── MENÚ / RESERVA ── */}
       {reservationsOpen ? (
-        <section className="bg-crema py-2" id="reservar">
-          <ReservationForm products={products} config={config} promotion={activePromotion} />
+        <section className="bg-cream2 py-2" id="reservar">
+          <ReservationForm
+            products={[
+              ...products,
+              // Dedupe sin distinguir mayúsculas: los ids del Sheet se teclean
+              // a mano ("Inca-kola") y el dedupe exacto dejaba duplicados.
+              ...getPacks().filter((pk) => !products.some((p) => mismoId(p.id, pk.id))),
+              ...getSalsas().filter((s) => !products.some((p) => mismoId(p.id, s.id))),
+            ]}
+            config={config}
+            promotion={activePromotion}
+            weekendOffer={weekendOffer}
+            directoAvailable={directoStatus.isOpen}
+            requireAccessCode={launchPhase === "early_access"}
+            accessCodeValue={
+              launchPhase === "early_access" ? EARLY_ACCESS_CODE : ""
+            }
+          />
         </section>
       ) : (
-        <ClosedState message={storeConfig.closedMessage} />
+        <>
+          <ClosedState message={storeConfig.closedMessage} />
+          <MenuShowcase products={products} />
+          <Packs readOnly />
+        </>
       )}
+
+      {/* ── RESEÑAS ── */}
+      <Reviews />
+
+      {/* ── ZONA DE REPARTO ── */}
+      <ZoneMap />
+
+      {/* ── ATENCIÓN AL CLIENTE ── */}
+      <ContactHelp variant="section" />
+
+      {/* ── CARRITO FLOTANTE ── */}
+      <FloatingCart />
+
+      {/* ── VENTANA DEL LUNES (banner con countdown; se oculta solo) ── */}
+      {reservationsOpen && <VentanaLunes />}
     </>
   );
 }
